@@ -1,11 +1,1 @@
-local function GodMode()
-    localplayer = entities:GetLocalPlayer()
-    if localplayer and localplayer:IsAlive() then
-        local hp = localplayer:GetHealth()
-        if hp < 50 then
-            localplayer:SetPropInt("m_iHealth", 150) 
-        end
-    end
-end
 
-callbacks.Register("Draw", "RunGodMode", GodMode)
