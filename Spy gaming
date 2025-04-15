@@ -1,44 +1,23 @@
 @echo off
+setlocal enabledelayedexpansion
 
-set sv_cheats_enabled=0
-
-:main
-cls
-echo.
-echo 1. Enable sv_cheats
-echo 2. Disable sv_cheats
-echo 3. Toggle sv_cheats
-echo 4. Exit
-
-set /p choice=
-if %choice%==1 (
-    echo Setting sv_cheats to 1...
-    echo sv_cheats 1 > console.txt
-    set sv_cheats_enabled=1
-) else if %choice%==2 (
-    echo Setting sv_cheats to 0...
-    echo sv_cheats 0 > console.txt
-    set sv_cheats_enabled=0
-) else if %choice%==3 (
-    if %sv_cheats_enabled%==1 (
-        echo Setting sv_cheats to 0...
-        echo sv_cheats 0 > console.txt
-        set sv_cheats_enabled=0
-    ) else (
-        echo Setting sv_cheats to 1...
-        echo sv_cheats 1 > console.txt
-        set sv_cheats_enabled=1
-    )
-) else if %choice%==4 (
-    echo Exiting...
-    exit
+:: Check if running as administrator
+net session >nul 2>&1
+if %errorlevel% == 0 (
+    echo Running as administrator...
+    goto admin
 ) else (
-    echo Invalid choice. Please choose again.
+    echo Please run as administrator...
+    pause
+    exit
 )
 
-timeout /t 2 > nul
+:admin
+set "sv_cheats=1"
+echo Setting sv_cheats to %sv_cheats%
 
-echo console < console.txt
-echo.
-echo Press any key to continue...
-pause > nul
+:: Close and relaunch TF2
+taskkill /im tf.exe /f
+start "tf.exe"
+
+pause
