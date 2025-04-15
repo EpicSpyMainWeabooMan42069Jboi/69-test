@@ -1,23 +1,82 @@
 @echo off
-setlocal enabledelayedexpansion
+title TF2 Cheat Launcher
+color 0A
 
-:: Check if running as administrator
+:: Check for admin privileges
 net session >nul 2>&1
-if %errorlevel% == 0 (
-    echo Running as administrator...
-    goto admin
-) else (
-    echo Please run as administrator...
+if %errorlevel% neq 0 (
+    echo Administrator privileges required!
+    echo Right-click and select "Run as administrator"
     pause
     exit
 )
 
-:admin
-set "sv_cheats=1"
-echo Setting sv_cheats to %sv_cheats%
+:: Variables
+set "STEAMPATH="
+set "TF2PATH="
+set "CHEATSENABLED=false"
 
-:: Close and relaunch TF2
-taskkill /im tf.exe /f
-start "tf.exe"
+:: Find Steam installation
+if exist "C:\Program Files (x86)\Steam" (
+    set "STEAMPATH=C:\Program Files (x86)\Steam"
+) else if exist "C:\Program Files\Steam" (
+    set "STEAMPATH=C:\Program Files\Steam"
+) else (
+    echo Could not find Steam installation.
+    echo Please enter Steam path:
+    set /p STEAMPATH=
+)
 
+:: Find TF2 installation
+if exist "%STEAMPATH%\steamapps\common\Team Fortress 2" (
+    set "TF2PATH=%STEAMPATH%\steamapps\common\Team Fortress 2"
+) else (
+    echo Could not find TF2 installation.
+    echo Please enter TF2 path:
+    set /p TF2PATH=
+)
+
+echo Found TF2 at: %TF2PATH%
+
+:: Create cheat config file
+echo Creating cheat configuration...
+if not exist "%TF2PATH%\tf\cfg\cheats.cfg" (
+    echo // TF2 Cheat Configuration > "%TF2PATH%\tf\cfg\cheats.cfg"
+    echo sv_cheats 1 >> "%TF2PATH%\tf\cfg\cheats.cfg"
+    echo host_timescale 1 >> "%TF2PATH%\tf\cfg\cheats.cfg"
+    echo echo "Cheats Enabled!" >> "%TF2PATH%\tf\cfg\cheats.cfg"
+    echo set CHEATSENABLED=true
+) else (
+    echo Cheat configuration already exists!
+)
+
+:: Create autoexec.cfg if it doesn't exist
+if not exist "%TF2PATH%\tf\cfg\autoexec.cfg" (
+    echo // TF2 Autoexec Configuration > "%TF2PATH%\tf\cfg\autoexec.cfg"
+    echo bind "F7" "exec cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
+    echo echo "Press F7 to toggle cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
+)
+
+:: Create launch options
+echo.
+echo Setting up launch options...
+echo This will add the following launch options to TF2:
+echo -insecure -console -novid
+echo.
+echo NOTE: Running with -insecure means you cannot join VAC-secured servers!
+echo This is for offline or non-VAC servers only.
+echo.
 pause
+
+:: Launch TF2 with parameters
+echo Launching TF2 with cheats enabled...
+start "" "%STEAMPATH%\steam.exe" -applaunch 440 -insecure -console -novid
+
+echo.
+echo Important: To toggle cheats in-game, press F7
+echo Use the console (~) to enter cheat commands
+echo.
+echo Boolean CHEATSENABLED set to: %CHEATSENABLED%
+echo.
+pause
+exit
