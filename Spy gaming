@@ -37,4 +37,8 @@ if %choice%==1 (
 )
 
 timeout /t 2 > nul
-goto main
+
+echo console < console.txt
+echo.
+echo Press any key to continue...
+pause > nul
