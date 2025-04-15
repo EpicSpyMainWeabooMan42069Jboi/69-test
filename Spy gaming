@@ -1,11 +1,40 @@
-callbacks.Register( "CreateMove", function(cmd)
-    if entities.GetLocalPlayer():InCond( 3 ) and entities.GetLocalPlayer():GetPropInt( "m_fFlags" ) & FL_ONGROUND == 1  then 
-        if input.IsButtonDown( KEY_W ) then
-            if cmd.command_number % 2 == 1 then
-                cmd:SetSideMove( 1000 )  
-            else
-                cmd:SetSideMove( -1000 )  
-            end
-        end
-    end
-end)
+@echo off
+
+set sv_cheats_enabled=0
+
+:main
+cls
+echo.
+echo 1. Enable sv_cheats
+echo 2. Disable sv_cheats
+echo 3. Toggle sv_cheats
+echo 4. Exit
+
+set /p choice=
+if %choice%==1 (
+    echo Setting sv_cheats to 1...
+    echo sv_cheats 1 > console.txt
+    set sv_cheats_enabled=1
+) else if %choice%==2 (
+    echo Setting sv_cheats to 0...
+    echo sv_cheats 0 > console.txt
+    set sv_cheats_enabled=0
+) else if %choice%==3 (
+    if %sv_cheats_enabled%==1 (
+        echo Setting sv_cheats to 0...
+        echo sv_cheats 0 > console.txt
+        set sv_cheats_enabled=0
+    ) else (
+        echo Setting sv_cheats to 1...
+        echo sv_cheats 1 > console.txt
+        set sv_cheats_enabled=1
+    )
+) else if %choice%==4 (
+    echo Exiting...
+    exit
+) else (
+    echo Invalid choice. Please choose again.
+)
+
+timeout /t 2 > nul
+goto main
