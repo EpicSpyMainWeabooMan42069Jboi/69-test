@@ -53,27 +53,25 @@ if not exist "%TF2PATH%\tf\cfg\cheats.cfg" (
 :: Create autoexec.cfg if it doesn't exist
 if not exist "%TF2PATH%\tf\cfg\autoexec.cfg" (
     echo // TF2 Autoexec Configuration > "%TF2PATH%\tf\cfg\autoexec.cfg"
-    echo bind "F7" "exec cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
-    echo echo "Press F7 to toggle cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
+    echo bind "insert" "exec cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
+    echo echo "Press insert to toggle cheats" >> "%TF2PATH%\tf\cfg\autoexec.cfg"
 )
 
 :: Create launch options
 echo.
 echo Setting up launch options...
 echo This will add the following launch options to TF2:
-echo -insecure -console -novid
+echo -console -novid
 echo.
-echo NOTE: Running with -insecure means you cannot join VAC-secured servers!
-echo This is for offline or non-VAC servers only.
 echo.
 pause
 
 :: Launch TF2 with parameters
 echo Launching TF2 with cheats enabled...
-start "" "%STEAMPATH%\steam.exe" -applaunch 440 -insecure -console -novid
+start "" "%STEAMPATH%\steam.exe" -applaunch 440
 
 echo.
-echo Important: To toggle cheats in-game, press F7
+echo Important: To toggle cheats in-game, press insert
 echo Use the console (~) to enter cheat commands
 echo.
 echo Boolean CHEATSENABLED set to: %CHEATSENABLED%
