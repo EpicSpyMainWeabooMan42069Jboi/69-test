@@ -167,10 +167,10 @@ public:
     SpoofedConvar(const char* szCVar, const char* newName) {
         m_pOriginalCVar = gI_EngineCvar->FindVar(szCVar);
         if (!m_pOriginalCVar) {
-            LogToFile("ERROR: Failed to find original ConVar!");
+            MessageBoxA(NULL, "FindVar(\"sv_cheats\") returned nullptr!", "Debug", MB_OK | MB_ICONERROR);
             return;
         }
-        Spoof(newName);
+
     }
 
     SpoofedConvar(ConVar* pCVar, const char* newName) {
@@ -187,14 +187,15 @@ public:
             // Restore value
             SetString(m_szOriginalValue);
             // Restore the name
-            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, PAGE_READWRITE, &dwOld);
-            strcpy_s((char*)m_pOriginalCVar->m_pszName, 128, m_szOriginalName);
-            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, dwOld, &dwOld);
-
+            if (!VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, PAGE_READWRITE, &dwOld)) {
+                MessageBoxA(NULL, "VirtualProtect failed on m_pszName", "Memory Error", MB_OK | MB_ICONERROR);
+            }
             // Unregister dummy cvar
             gI_EngineCvar->UnregisterConCommand(m_pDummyCVar);
             free(m_pDummyCVar);
-            m_pDummyCVar = nullptr;
+                if (!m_pDummyCVar) {
+                    MessageBoxA(NULL, "VirtualProtect failed on m_pszName", "Memory Error", MB_OK | MB_ICONERROR);
+                }
         }
     }
 
