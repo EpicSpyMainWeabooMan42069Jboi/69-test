@@ -1,3 +1,4 @@
+#include "pch.h"
 #include <Windows.h>
 #include <cstring>
 #include <stdio.h>
@@ -420,28 +421,22 @@ void EnableSvCheatsSpoof() {
             MessageBoxA(NULL, "Failed to enable sv_cheats bypass", "Error", MB_OK | MB_ICONERROR);
         }
     }
-    else if (g_pSvCheats->IsSpoofed()) {
-        LogToFile("Bypass already initialized, setting value to 1");
-        g_pSvCheats->SetInt(1);
-        g_bBypassActive = true;
+    void DisableSvCheatsSpoof() {
+        if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
+            g_pSvCheats->SetInt(0);
+            g_bBypassActive = false;
 
-        Color infoColor;
-        infoColor.r = 0;
-        infoColor.g = 255;
-        infoColor.b = 0;
-        infoColor.a = 255;
+            Color infoColor;
+            infoColor.r = 255;
+            infoColor.g = 165;
+            infoColor.b = 0;
+            infoColor.a = 255;
 
-        if (gI_EngineCvar) {
-            gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass ENABLED (already setup)\n");
+            gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
+
+            MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
         }
-
-        // Also show a message box
-        MessageBoxA(NULL, "sv_cheats bypass ENABLED (already setup)", "Status", MB_OK | MB_ICONINFORMATION);
-
-        // Execute a test command
-        ExecuteCommand("echo [PLUGIN] sv_cheats bypass is now ACTIVE - you can use cheat commands!");
     }
-}
 
 // Toggle function for hotkey
 void ToggleSvCheatsSpoof() {
