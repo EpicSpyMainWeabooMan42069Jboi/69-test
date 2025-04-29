@@ -1,0 +1,471 @@
+#include <pch.h>
+#include <Windows.h>
+#include <cstring>
+#include <stdio.h>
+#include <Psapi.h>
+#include <time.h>
+#include <string>
+
+// Forward declarations
+class ConVar;
+class ICvar;
+
+// Define CreateInterfaceFn type for Source Engine interfaces
+using CreateInterfaceFn = void* (*)(const char*, int*);
+
+// Simple color struct for console output
+struct Color {
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
+    unsigned char a;
+};
+
+// Global variables
+ICvar* gI_EngineCvar = nullptr;
+bool g_bBypassActive = false;
+bool g_bInitialized = false;
+std::string g_sNewName;
+class SpoofedConvar* g_pSvCheats = nullptr;
+HHOOK g_hKeyboardHook = NULL;
+
+// Utility class for pattern scanning and other helpers
+class Utils {
+public:
+    uintptr_t FindPattern(const char* szModule, const char* szSignature) {
+        MODULEINFO modInfo;
+        GetModuleInformation(GetCurrentProcess(), GetModuleHandleA(szModule), &modInfo, sizeof(MODULEINFO));
+        uintptr_t startAddress = reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll);
+        uintptr_t endAddress = startAddress + modInfo.SizeOfImage;
+        const char* pat = szSignature;
+        uintptr_t firstMatch = 0;
+        for (uintptr_t pCur = startAddress; pCur < endAddress; pCur++) {
+            if (!*pat) return firstMatch;
+            if (*(PBYTE)pat == '\?' || *(BYTE*)pCur == getByte(pat)) {
+                if (!firstMatch) firstMatch = pCur;
+                if (!pat[2]) return firstMatch;
+                if (*(PWORD)pat == '\?\?' || *(PBYTE)pat != '\?') pat += 3;
+                else pat += 2;
+            }
+            else {
+                pat = szSignature;
+                firstMatch = 0;
+            }
+        }
+        return NULL;
+    }
+
+    char* RandomStr(int length) {
+        static const char Alphabets[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        char* sRet = new char[length + 1];
+        int size = sizeof(Alphabets) - 1;
+        for (int i = 0; i < length; i++) {
+            sRet[i] = Alphabets[rand() % size];
+            sRet[i + 1] = '\0';
+        }
+        return sRet;
+    }
+
+private:
+    unsigned char getBits(unsigned char x) {
+        if ((x & (~0x20)) >= 'A' && (x & (~0x20)) <= 'F')
+            return ((x & (~0x20)) - 'A' + 0xA);
+        else if (x >= '0' && x <= '9')
+            return x - '0';
+        return 0;
+    }
+
+    unsigned char getByte(const char* x) {
+        return (getBits(x[0]) << 4 | getBits(x[1]));
+    }
+};
+
+Utils g_Utils;
+
+// ICvar interface definitions
+class ICvar {
+public:
+    virtual void RegisterConCommand(ConVar* pCommandBase) = 0;
+    virtual void UnregisterConCommand(ConVar* pCommandBase) = 0;
+    virtual ConVar* FindVar(const char* var_name) = 0;
+    virtual void ConsoleColorPrintf(const Color& clr, const char* pFormat, ...) = 0;
+};
+
+// ConVar class definition
+class ConVar {
+public:
+    void* m_pVMT;
+    ConVar* m_pNext;
+    bool m_bRegistered;
+    const char* m_pszName;
+    const char* m_pszHelpString;
+    int m_nFlags;
+    char pad_0x0018[0x4];
+    ConVar* m_pParent;
+    const char* m_pszDefaultValue;
+    char* m_pszString;
+    int m_StringLength;
+    float m_fValue;
+    int m_nValue;
+    bool m_bHasMin;
+    float m_fMinVal;
+    bool m_bHasMax;
+    float m_fMaxVal;
+    void* m_fnChangeCallback;
+
+    int GetInt() {
+        return m_nValue;
+    }
+
+    float GetFloat() {
+        return m_fValue;
+    }
+
+    const char* GetString() {
+        return m_pszString;
+    }
+
+    const char* GetDefault() {
+        return m_pszDefaultValue;
+    }
+
+    void SetValue(int value) {
+        m_nValue = value;
+        m_fValue = (float)value;
+    }
+
+    void SetValue(float value) {
+        m_fValue = value;
+        m_nValue = (int)value;
+    }
+
+    void SetValue(const char* value) {
+        if (m_pszString) {
+            delete[] m_pszString;
+        }
+        m_pszString = _strdup(value);
+    }
+};
+
+// SpoofedConvar class implementation
+class SpoofedConvar {
+public:
+    SpoofedConvar(const char* szCVar, const char* newName) {
+        m_pOriginalCVar = gI_EngineCvar->FindVar(szCVar);
+        Spoof(newName);
+    }
+
+    SpoofedConvar(ConVar* pCVar, const char* newName) {
+        m_pOriginalCVar = pCVar;
+        Spoof(newName);
+    }
+
+    ~SpoofedConvar() {
+        if (IsSpoofed()) {
+            DWORD dwOld;
+
+            // Restore flags
+            SetFlags(m_iOriginalFlags);
+            // Restore value
+            SetString(m_szOriginalValue);
+            // Restore the name
+            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, PAGE_READWRITE, &dwOld);
+            strcpy_s((char*)m_pOriginalCVar->m_pszName, 128, m_szOriginalName);
+            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, dwOld, &dwOld);
+
+            // Unregister dummy cvar
+            gI_EngineCvar->UnregisterConCommand(m_pDummyCVar);
+            free(m_pDummyCVar);
+            m_pDummyCVar = nullptr;
+        }
+    }
+
+    bool IsSpoofed() {
+        return m_pDummyCVar != nullptr;
+    }
+
+    void Spoof(const char* newName) {
+        if (!IsSpoofed() && m_pOriginalCVar) {
+            // Save old name value and flags so we can restore the cvar later if needed
+            m_iOriginalFlags = m_pOriginalCVar->m_nFlags;
+            strcpy_s(m_szOriginalName, sizeof(m_szOriginalName), m_pOriginalCVar->m_pszName);
+            strcpy_s(m_szOriginalValue, sizeof(m_szOriginalValue), m_pOriginalCVar->GetDefault());
+
+            sprintf_s(m_szDummyName, 128, "%s", newName);
+
+            // Create the dummy cvar
+            m_pDummyCVar = (ConVar*)malloc(sizeof(ConVar));
+            if (!m_pDummyCVar) {
+                return;
+            }
+
+            memcpy(m_pDummyCVar, m_pOriginalCVar, sizeof(ConVar));
+
+            m_pDummyCVar->m_pNext = nullptr;
+            // Register it
+            gI_EngineCvar->RegisterConCommand(m_pDummyCVar);
+
+            // Fix "write access violation" issue
+            DWORD dwOld;
+            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, PAGE_READWRITE, &dwOld);
+            // Rename the cvar
+            strcpy_s((char*)m_pOriginalCVar->m_pszName, 128, m_szDummyName);
+            VirtualProtect((LPVOID)m_pOriginalCVar->m_pszName, 128, dwOld, &dwOld);
+
+            SetFlags(0); // FCVAR_NONE
+        }
+    }
+
+    void SetFlags(int flags) {
+        if (IsSpoofed()) {
+            m_pOriginalCVar->m_nFlags = flags;
+        }
+    }
+
+    int GetFlags() {
+        return IsSpoofed() ? m_pOriginalCVar->m_nFlags : 0;
+    }
+
+    void SetInt(int iValue) {
+        if (IsSpoofed()) {
+            m_pOriginalCVar->SetValue(iValue);
+        }
+    }
+
+    void SetFloat(float flValue) {
+        if (IsSpoofed()) {
+            m_pOriginalCVar->SetValue(flValue);
+        }
+    }
+
+    void SetString(const char* szValue) {
+        if (IsSpoofed()) {
+            m_pOriginalCVar->SetValue(szValue);
+        }
+    }
+
+    int GetInt() {
+        return IsSpoofed() ? m_pOriginalCVar->GetInt() : 0;
+    }
+
+    float GetFloat() {
+        return IsSpoofed() ? m_pOriginalCVar->GetFloat() : 0.0f;
+    }
+
+    const char* GetString() {
+        return IsSpoofed() ? m_pOriginalCVar->GetString() : "";
+    }
+
+private:
+    ConVar* m_pOriginalCVar = nullptr;
+    ConVar* m_pDummyCVar = nullptr;
+
+    char m_szDummyName[128];
+    char m_szDummyValue[128];
+    char m_szOriginalName[128];
+    char m_szOriginalValue[128];
+    int m_iOriginalFlags;
+};
+
+// Functions to enable/disable sv_cheats spoofing
+void EnableSvCheatsSpoof() {
+    if (!g_pSvCheats) {
+        char* sNewName = new char[32];
+        strcpy_s(sNewName, 32, "sv_cheats_");
+        strcat_s(sNewName, 32, g_Utils.RandomStr(5));
+        g_sNewName = sNewName;
+
+        g_pSvCheats = new SpoofedConvar("sv_cheats", sNewName);
+
+        if (g_pSvCheats->IsSpoofed()) {
+            Color successColor;
+            successColor.r = 0;
+            successColor.g = 255;
+            successColor.b = 0;
+            successColor.a = 255;
+
+            gI_EngineCvar->ConsoleColorPrintf(successColor, "[PLUGIN] sv_cheats renamed to: %s\n", sNewName);
+            g_pSvCheats->SetInt(1);
+
+            // SourceMod convar check bypass
+            ConVar* newFakeCvar = (ConVar*)malloc(sizeof(ConVar));
+            memset(newFakeCvar, 0, sizeof(ConVar));
+
+            // Set up the fake ConVar similar to original sv_cheats
+            newFakeCvar->m_pszName = _strdup("sv_cheats");
+            newFakeCvar->m_pszDefaultValue = _strdup("0");
+            newFakeCvar->m_nFlags = 0; // FCVAR_NOTIFY | FCVAR_REPLICATED
+
+            // Register it
+            gI_EngineCvar->RegisterConCommand(newFakeCvar);
+
+            g_bBypassActive = true;
+            gI_EngineCvar->ConsoleColorPrintf(successColor, "[PLUGIN] sv_cheats bypass ENABLED (Clientside only)\n");
+
+            // Create a message box to indicate success
+            MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
+        }
+    }
+    else if (g_pSvCheats->IsSpoofed()) {
+        g_pSvCheats->SetInt(1);
+        g_bBypassActive = true;
+
+        Color infoColor;
+        infoColor.r = 0;
+        infoColor.g = 255;
+        infoColor.b = 0;
+        infoColor.a = 255;
+
+        gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass ENABLED (already setup)\n");
+
+        // Also show a message box
+        MessageBoxA(NULL, "sv_cheats bypass ENABLED (already setup)", "Status", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+void DisableSvCheatsSpoof() {
+    if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
+        g_pSvCheats->SetInt(0);
+        g_bBypassActive = false;
+
+        Color infoColor;
+        infoColor.r = 255;
+        infoColor.g = 165;
+        infoColor.b = 0;
+        infoColor.a = 255;
+
+        gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
+
+        // Also show a message box
+        MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+// Toggle function for hotkey
+void ToggleSvCheatsSpoof() {
+    if (!g_bBypassActive) {
+        EnableSvCheatsSpoof();
+    }
+    else {
+        DisableSvCheatsSpoof();
+    }
+}
+
+// Keyboard hook callback function
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0) {
+        if (wParam == WM_KEYDOWN) {
+            KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
+
+            // VK_INSERT is the virtual key code for the Insert key
+            if (kbStruct->vkCode == VK_INSERT) {
+                ToggleSvCheatsSpoof();
+            }
+        }
+    }
+    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+}
+
+// Function to initialize the plugin
+bool Initialize() {
+    srand((unsigned)time(NULL));
+
+    // Get the IEngine interface using CreateInterface
+    HMODULE engineModule = GetModuleHandleA("engine.dll");
+    if (!engineModule) {
+        MessageBoxA(NULL, "Failed to get engine.dll module!", "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    // Get the CreateInterface function from engine.dll
+    CreateInterfaceFn interfaceFactory = (CreateInterfaceFn)GetProcAddress(engineModule, "CreateInterface");
+    if (!interfaceFactory) {
+        MessageBoxA(NULL, "Failed to get CreateInterface function!", "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    // Try to get ICvar interface
+    gI_EngineCvar = reinterpret_cast<ICvar*>(interfaceFactory("VEngineCvar004", nullptr));
+    if (!gI_EngineCvar) {
+        MessageBoxA(NULL, "Failed to get ICvar interface!", "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    // Display welcome message in console
+    Color welcomeColor;
+    welcomeColor.r = 0;
+    welcomeColor.g = 255;
+    welcomeColor.b = 0;
+    welcomeColor.a = 255;
+
+    gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
+    gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " sv_cheats Bypass Plugin Loaded!\n");
+    gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " Press INSERT key to toggle bypass\n");
+    gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
+
+    // Set up keyboard hook for the Insert key
+    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+    if (g_hKeyboardHook == NULL) {
+        MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    // Show a message box to indicate successful initialization
+    MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
+
+    return true;
+}
+
+// Function to clean up
+void Cleanup() {
+    // Disable the bypass if active
+    if (g_bBypassActive) {
+        DisableSvCheatsSpoof();
+    }
+
+    // Clean up the spoofed convar
+    delete g_pSvCheats;
+    g_pSvCheats = nullptr;
+
+    // Unhook keyboard hook
+    if (g_hKeyboardHook != NULL) {
+        UnhookWindowsHookEx(g_hKeyboardHook);
+        g_hKeyboardHook = NULL;
+    }
+}
+
+// Thread function for the DLL to run continuously
+DWORD WINAPI MainThread(LPVOID lpParam) {
+    // Initialize the plugin
+    if (!Initialize()) {
+        return 1;
+    }
+
+    g_bInitialized = true;
+
+    // Message loop to keep the thread alive and process keyboard events
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    return 0;
+}
+
+// DLL entry point
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+
+        // Create a thread for our DLL
+        CreateThread(NULL, 0, MainThread, hModule, 0, NULL);
+    }
+    else if (reason == DLL_PROCESS_DETACH) {
+        // Clean up resources if the DLL is being unloaded
+        if (g_bInitialized) {
+            Cleanup();
+        }
+    }
+    return TRUE;
+}
