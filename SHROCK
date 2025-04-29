@@ -703,15 +703,17 @@ void EnableSvCheatsSpoof() {
     BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
         if (reason == DLL_PROCESS_ATTACH) {
             DisableThreadLibraryCalls(hModule);
-
-            // Create a thread for our DLL
             CreateThread(NULL, 0, MainThread, hModule, 0, NULL);
         }
         else if (reason == DLL_PROCESS_DETACH) {
-            // Clean up resources if the DLL is being unloaded
             if (g_bInitialized) {
                 Cleanup();
             }
         }
         return TRUE;
+    } // 👈 this ends DllMain, you're done here
+
+    // Outside of DllMain — all good ✅
+    void DisableSvCheatsSpoof() {
+        MessageBoxA(NULL, "Dummy DisableSvCheatsSpoof called", "Debug", MB_OK);
     }
