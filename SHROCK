@@ -1,4 +1,3 @@
-#include <pch.h>
 #include <Windows.h>
 #include <cstring>
 #include <stdio.h>
@@ -317,7 +316,7 @@ void EnableSvCheatsSpoof() {
         infoColor.a = 255;
 
         gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass ENABLED (already setup)\n");
-
+        
         // Also show a message box
         MessageBoxA(NULL, "sv_cheats bypass ENABLED (already setup)", "Status", MB_OK | MB_ICONINFORMATION);
     }
@@ -335,7 +334,7 @@ void DisableSvCheatsSpoof() {
         infoColor.a = 255;
 
         gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
-
+        
         // Also show a message box
         MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
     }
@@ -356,7 +355,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         if (wParam == WM_KEYDOWN) {
             KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
-
+            
             // VK_INSERT is the virtual key code for the Insert key
             if (kbStruct->vkCode == VK_INSERT) {
                 ToggleSvCheatsSpoof();
@@ -369,28 +368,103 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 // Function to initialize the plugin
 bool Initialize() {
     srand((unsigned)time(NULL));
-
+    
     // Get the IEngine interface using CreateInterface
     HMODULE engineModule = GetModuleHandleA("engine.dll");
     if (!engineModule) {
-        MessageBoxA(NULL, "Failed to get engine.dll module!", "Error", MB_OK | MB_ICONERROR);
+        MessageBoxA(NULL, "Failed to get engine.dll module! Make sure you're injecting into a Source Engine game.", "Error", MB_OK | MB_ICONERROR);
         return false;
     }
-
+    
     // Get the CreateInterface function from engine.dll
     CreateInterfaceFn interfaceFactory = (CreateInterfaceFn)GetProcAddress(engineModule, "CreateInterface");
     if (!interfaceFactory) {
         MessageBoxA(NULL, "Failed to get CreateInterface function!", "Error", MB_OK | MB_ICONERROR);
         return false;
     }
-
-    // Try to get ICvar interface
-    gI_EngineCvar = reinterpret_cast<ICvar*>(interfaceFactory("VEngineCvar004", nullptr));
+    
+    // Try multiple interface versions for ICvar
+    const char* possibleInterfaces[] = {
+        "VEngineCvar004",
+        "VEngineCvar003",
+        "VEngineCvar007",
+        "VEngineCvar002",
+        "VEngineCvar001",
+        "VCvar001",
+        "VCvar002",
+        "VCvar003",
+        "VCvar004"
+    };
+    
+    for (const char* interfaceName : possibleInterfaces) {
+        gI_EngineCvar = reinterpret_cast<ICvar*>(interfaceFactory(interfaceName, nullptr));
+        if (gI_EngineCvar) {
+            // Found a working interface
+            char buffer[256];
+            sprintf_s(buffer, "Successfully found ICvar interface: %s", interfaceName);
+            MessageBoxA(NULL, buffer, "Success", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+    }
+    
+    // Alternative: Try to get the interface from tier0.dll or vstdlib.dll
     if (!gI_EngineCvar) {
-        MessageBoxA(NULL, "Failed to get ICvar interface!", "Error", MB_OK | MB_ICONERROR);
+        HMODULE vstdlibModule = GetModuleHandleA("vstdlib.dll");
+        if (vstdlibModule) {
+            CreateInterfaceFn vstdlibFactory = (CreateInterfaceFn)GetProcAddress(vstdlibModule, "CreateInterface");
+            if (vstdlibFactory) {
+                for (const char* interfaceName : possibleInterfaces) {
+                    gI_EngineCvar = reinterpret_cast<ICvar*>(vstdlibFactory(interfaceName, nullptr));
+                    if (gI_EngineCvar) {
+                        // Found a working interface in vstdlib.dll
+                        char buffer[256];
+                        sprintf_s(buffer, "Successfully found ICvar interface in vstdlib.dll: %s", interfaceName);
+                        MessageBoxA(NULL, buffer, "Success", MB_OK | MB_ICONINFORMATION);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Try one more alternative
+    if (!gI_EngineCvar) {
+        HMODULE tier0Module = GetModuleHandleA("tier0.dll");
+        if (tier0Module) {
+            CreateInterfaceFn tier0Factory = (CreateInterfaceFn)GetProcAddress(tier0Module, "CreateInterface");
+            if (tier0Factory) {
+                for (const char* interfaceName : possibleInterfaces) {
+                    gI_EngineCvar = reinterpret_cast<ICvar*>(tier0Factory(interfaceName, nullptr));
+                    if (gI_EngineCvar) {
+                        // Found a working interface in tier0.dll
+                        char buffer[256];
+                        sprintf_s(buffer, "Successfully found ICvar interface in tier0.dll: %s", interfaceName);
+                        MessageBoxA(NULL, buffer, "Success", MB_OK | MB_ICONINFORMATION);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Check if we found any interface
+    if (!gI_EngineCvar) {
+        // Get the name of the process we're injected into
+        char processName[MAX_PATH] = "unknown";
+        GetModuleFileNameA(NULL, processName, MAX_PATH);
+        char* filename = strrchr(processName, '\\');
+        if (filename) {
+            filename++; // Skip the backslash
+        } else {
+            filename = processName;
+        }
+        
+        char errorMsg[512];
+        sprintf_s(errorMsg, "Failed to get ICvar interface!\n\nProcess: %s\n\nTry checking your game version or using a different interface version.", filename);
+        MessageBoxA(NULL, errorMsg, "Error", MB_OK | MB_ICONERROR);
         return false;
     }
-
+    
     // Display welcome message in console
     Color welcomeColor;
     welcomeColor.r = 0;
@@ -402,17 +476,17 @@ bool Initialize() {
     gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " sv_cheats Bypass Plugin Loaded!\n");
     gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " Press INSERT key to toggle bypass\n");
     gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
-
+    
     // Set up keyboard hook for the Insert key
     g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
     if (g_hKeyboardHook == NULL) {
         MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
         return false;
     }
-
+    
     // Show a message box to indicate successful initialization
     MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
-
+    
     return true;
 }
 
@@ -422,11 +496,11 @@ void Cleanup() {
     if (g_bBypassActive) {
         DisableSvCheatsSpoof();
     }
-
+    
     // Clean up the spoofed convar
     delete g_pSvCheats;
     g_pSvCheats = nullptr;
-
+    
     // Unhook keyboard hook
     if (g_hKeyboardHook != NULL) {
         UnhookWindowsHookEx(g_hKeyboardHook);
@@ -440,16 +514,16 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     if (!Initialize()) {
         return 1;
     }
-
+    
     g_bInitialized = true;
-
+    
     // Message loop to keep the thread alive and process keyboard events
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-
+    
     return 0;
 }
 
@@ -457,7 +531,7 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-
+        
         // Create a thread for our DLL
         CreateThread(NULL, 0, MainThread, hModule, 0, NULL);
     }
