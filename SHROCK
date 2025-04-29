@@ -8,6 +8,10 @@
 #include <iostream>
 #include <fstream>
 
+void DisableSvCheatsSpoof();
+
+
+
 // Forward declarations
 class ConVar;
 class ICvar;
@@ -385,16 +389,16 @@ void EnableSvCheatsSpoof() {
             ExecuteCommand("r_drawothermodels 2"); // This command requires sv_cheats
 
             // Create a fake ConVar to handle checks
+           
             ConVar* newFakeCvar = (ConVar*)malloc(sizeof(ConVar));
             if (newFakeCvar) {
                 memset(newFakeCvar, 0, sizeof(ConVar));
 
                 // Set up the fake ConVar similar to original sv_cheats
-                newFakeCvar->m_pszName = *strdup("sv*cheats");
+                newFakeCvar->m_pszName = _strdup("sv_cheats");  // or "sv*cheats" if obfuscating
                 newFakeCvar->m_pszDefaultValue = _strdup("0");
-                newFakeCvar->m_nFlags = 0; // FCVAR_NOTIFY | FCVAR_REPLICATED
+                newFakeCvar->m_nFlags = 0;
 
-                // Register it
                 gI_EngineCvar->RegisterConCommand(newFakeCvar);
 
                 LogToFile("Created fake sv_cheats ConVar");
@@ -402,7 +406,6 @@ void EnableSvCheatsSpoof() {
             else {
                 LogToFile("ERROR: Failed to allocate memory for fake ConVar");
             }
-
             g_bBypassActive = true;
 
             if (gI_EngineCvar) {
