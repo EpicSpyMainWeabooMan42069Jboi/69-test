@@ -94,16 +94,34 @@ private:
 
 Utils g_Utils;
 
-// ICvar interface definitions
+// ICvar interface definitions - Updated with more accurate TF2 interface
 class ICvar {
 public:
-    virtual void RegisterConCommand(ConVar* pCommandBase) = 0;
-    virtual void UnregisterConCommand(ConVar* pCommandBase) = 0;
+    // Attempt to match TF2 build 9543365 ICvar interface layout
+    virtual void                   Unknown00() = 0;
+    virtual void                   Unknown01() = 0;
+    virtual void                   Unknown02() = 0;
+    virtual void                   Unknown03() = 0;
+    virtual void                   Unknown04() = 0;
+    virtual void                   Unknown05() = 0;
+    virtual void                   Unknown06() = 0;
+    virtual void                   Unknown07() = 0;
+    virtual void                   Unknown08() = 0;
+    virtual void                   Unknown09() = 0;
+    virtual void                   Unknown10() = 0;
+    virtual void                   Unknown11() = 0;
+    virtual void                   RegisterConCommand(ConVar* pCommandBase) = 0;
+    virtual void                   UnregisterConCommand(ConVar* pCommandBase) = 0;
+    virtual void                   Unknown14() = 0;
+    virtual void                   Unknown15() = 0;
     virtual ConVar* FindVar(const char* var_name) = 0;
-    virtual void ConsoleColorPrintf(const Color& clr, const char* pFormat, ...) = 0;
+    virtual void                   Unknown17() = 0;
+    virtual void                   Unknown18() = 0;
+    virtual void                   Unknown19() = 0;
+    virtual void                   ConsoleColorPrintf(const Color& clr, const char* pFormat, ...) = 0;
 };
 
-// ConVar class definition
+// Updated ConVar class definition to match TF2 memory layout
 class ConVar {
 public:
     void* m_pVMT;
@@ -291,7 +309,8 @@ void DisableSvCheatsSpoof();
 
 // Command to execute in game console
 void ExecuteCommand(const char* cmd) {
-    typedef void (*ExecuteCommandFn)(const char*);
+    LogToFile("Attempting to execute command:");
+    LogToFile(cmd);
 
     // Try to find the function pointer using common patterns
     // This is a simplistic approach - may need to be adjusted for TF2 specifically
@@ -309,17 +328,23 @@ void ExecuteCommand(const char* cmd) {
     if (engineModule) {
         CreateInterfaceFn interfaceFactory = (CreateInterfaceFn)GetProcAddress(engineModule, "CreateInterface");
         if (interfaceFactory) {
+            // TF2-specific interface versions - updated for build 9543365
             const char* possibleInterfaces[] = {
-                "VEngineClient013",
-                "VEngineClient014",
-                "VEngineClient015",
+                "VEngineClient017", // Most likely for TF2
                 "VEngineClient016",
-                "VEngineClient017"
+                "VEngineClient015",
+                "VEngineClient014",
+                "VEngineClient013"
             };
 
             for (const char* interfaceName : possibleInterfaces) {
                 engineClient = interfaceFactory(interfaceName, nullptr);
-                if (engineClient) break;
+                if (engineClient) {
+                    char buffer[256];
+                    sprintf_s(buffer, "Found engine client interface: %s", interfaceName);
+                    LogToFile(buffer);
+                    break;
+                }
             }
         }
     }
@@ -329,18 +354,31 @@ void ExecuteCommand(const char* cmd) {
         typedef void(__thiscall* ExecuteCommandInClientFn)(void*, const char*);
         void** vtable = *(void***)engineClient;
 
-        // Common vtable offset for ExecuteClientCmd - may need adjustment
-        ExecuteCommandInClientFn executeClientCmd = (ExecuteCommandInClientFn)vtable[108];
+        // Try multiple vtable offsets for ExecuteClientCmd
+        int possibleOffsets[] = { 108, 107, 106, 109, 110, 111, 112, 113 };
 
-        try {
-            executeClientCmd(engineClient, cmd);
-            char buffer[256];
-            sprintf_s(buffer, "Executed command using EngineClient: %s", cmd);
-            LogToFile(buffer);
+        for (int offset : possibleOffsets) {
+            try {
+                char buffer[256];
+                sprintf_s(buffer, "Trying ExecuteClientCmd at vtable offset %d", offset);
+                LogToFile(buffer);
+
+                ExecuteCommandInClientFn executeClientCmd = (ExecuteCommandInClientFn)vtable[offset];
+                executeClientCmd(engineClient, cmd);
+
+                sprintf_s(buffer, "Successfully executed command using EngineClient at offset %d: %s", offset, cmd);
+                LogToFile(buffer);
+                break;
+            }
+            catch (...) {
+                char buffer[256];
+                sprintf_s(buffer, "Exception while executing command through EngineClient at offset %d", offset);
+                LogToFile(buffer);
+            }
         }
-        catch (...) {
-            LogToFile("ERROR: Exception while executing command through EngineClient");
-        }
+    }
+    else {
+        LogToFile("Failed to find engine client interface");
     }
 
     // Method 2: Find sv_cheats ConVar and modify it directly if we need to
@@ -352,44 +390,137 @@ void ExecuteCommand(const char* cmd) {
     }
 }
 
+// Try to find sv_cheats ConVar with multiple approaches
+ConVar* FindSvCheatsConVar() {
+    LogToFile("Attempting to find sv_cheats ConVar using multiple methods...");
+
+    // Method 1: Standard FindVar approach
+    ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
+    if (sv_cheats) {
+        LogToFile("Found sv_cheats via standard FindVar method");
+        return sv_cheats;
+    }
+
+    // Method 2: Try alternative names
+    const char* alt_names[] = {
+        "sv__cheats", "sv_cheat", "svcheats", "sv-cheats",
+        "SV_CHEATS", "Sv_Cheats", "sv_Cheats"
+    };
+
+    for (const char* name : alt_names) {
+        ConVar* sv_cheats = gI_EngineCvar->FindVar(name);
+        if (sv_cheats) {
+            char buffer[256];
+            sprintf_s(buffer, "Found sv_cheats via alternative name: %s", name);
+            LogToFile(buffer);
+            return sv_cheats;
+        }
+    }
+
+    // Method 3: Try to walk the ConVar list to find sv_cheats
+    // This is a more advanced approach but could be necessary
+    LogToFile("Attempting to walk ConVar list to find sv_cheats...");
+
+    // Find the first ConVar through a common one
+    ConVar* first_cvar = gI_EngineCvar->FindVar("fps_max");
+    if (!first_cvar) {
+        first_cvar = gI_EngineCvar->FindVar("host_timescale");
+    }
+    if (!first_cvar) {
+        first_cvar = gI_EngineCvar->FindVar("developer");
+    }
+
+    if (first_cvar) {
+        // Try to walk back to find root
+        ConVar* root = first_cvar;
+        while (root->m_pNext != nullptr) {
+            root = root->m_pNext;
+        }
+
+        // Now walk forward from beginning
+        ConVar* current = root;
+        int count = 0;
+        while (current != nullptr && count < 5000) {  // Safety limit
+            if (current->m_pszName && strcmp(current->m_pszName, "sv_cheats") == 0) {
+                LogToFile("Found sv_cheats by walking ConVar list!");
+                return current;
+            }
+            current = current->m_pNext;
+            count++;
+        }
+
+        char buffer[256];
+        sprintf_s(buffer, "Walked through %d ConVars but didn't find sv_cheats", count);
+        LogToFile(buffer);
+    }
+
+    LogToFile("Failed to find sv_cheats ConVar using all methods");
+    return nullptr;
+}
+
 void EnableSvCheatsSpoof() {
     LogToFile("Attempting to enable sv_cheats bypass...");
 
-    // First try to find if sv_cheats exists at all and log the result
-    ConVar* sv_cheats_test = gI_EngineCvar->FindVar("sv_cheats");
+    // Use our enhanced finder
+    ConVar* sv_cheats_test = FindSvCheatsConVar();
+
     if (!sv_cheats_test) {
-        LogToFile("ERROR: FindVar(\"sv_cheats\") returned nullptr!");
+        LogToFile("ERROR: Could not find sv_cheats ConVar with any method!");
 
-        // Try alternative spellings or formats
-        sv_cheats_test = gI_EngineCvar->FindVar("sv__cheats");
-        if (sv_cheats_test) {
-            LogToFile("Found ConVar with alternative name: sv__cheats");
+        // List some of the available cvars for debugging
+        LogToFile("Listing some available ConVars for diagnosis:");
+        const char* common_cvars[] = {
+            "cl_interp", "host_timescale", "r_drawothermodels", "cl_cmdrate",
+            "sv_gravity", "fps_max", "developer", "cl_showfps", "net_graph"
+        };
+
+        int found_count = 0;
+        for (const char* cvar : common_cvars) {
+            ConVar* test = gI_EngineCvar->FindVar(cvar);
+            if (test) {
+                found_count++;
+                char buffer[256];
+                sprintf_s(buffer, "Found ConVar: %s = %s", cvar, test->GetString());
+                LogToFile(buffer);
+            }
         }
-        else {
-            sv_cheats_test = gI_EngineCvar->FindVar("sv_cheat");
-            if (sv_cheats_test) {
-                LogToFile("Found ConVar with alternative name: sv_cheat");
-            }
-            else {
-                // List some of the available cvars for debugging
-                LogToFile("Listing some available ConVars:");
-                // This would require access to ConVar list which we don't have directly
-                // We could try to guess some common ConVars
-                const char* common_cvars[] = {
-                    "cl_interp", "host_timescale", "r_drawothermodels", "cl_cmdrate", "sv_gravity"
-                };
-                for (const char* cvar : common_cvars) {
-                    ConVar* test = gI_EngineCvar->FindVar(cvar);
-                    if (test) {
-                        char buffer[256];
-                        sprintf_s(buffer, "Found ConVar: %s = %s", cvar, test->GetString());
-                        LogToFile(buffer);
-                    }
-                }
 
-                MessageBoxA(NULL, "Could not find sv_cheats ConVar! See log for details.", "Error", MB_OK | MB_ICONERROR);
-                return;
+        char buffer[256];
+        sprintf_s(buffer, "Found %d of %d common ConVars", found_count, sizeof(common_cvars) / sizeof(common_cvars[0]));
+        LogToFile(buffer);
+
+        // Create a custom sv_cheats ConVar if we can't find the original
+        if (found_count > 0) {
+            LogToFile("Attempting to create a custom sv_cheats ConVar since we couldn't find the original");
+
+            // Find a template ConVar to copy structure from
+            ConVar* template_cvar = gI_EngineCvar->FindVar("developer");
+            if (!template_cvar) template_cvar = gI_EngineCvar->FindVar("fps_max");
+
+            if (template_cvar) {
+                // Create a new ConVar based on the template
+                ConVar* new_sv_cheats = (ConVar*)malloc(sizeof(ConVar));
+                if (new_sv_cheats) {
+                    // Copy structure but change name and defaults
+                    memcpy(new_sv_cheats, template_cvar, sizeof(ConVar));
+                    new_sv_cheats->m_pszName = _strdup("sv_cheats");
+                    new_sv_cheats->m_pszDefaultValue = _strdup("1");
+                    new_sv_cheats->m_pszHelpString = _strdup("Enable cheats on client");
+                    new_sv_cheats->m_nFlags = 0;
+                    new_sv_cheats->SetValue(1);
+
+                    // Register our new ConVar
+                    gI_EngineCvar->RegisterConCommand(new_sv_cheats);
+
+                    LogToFile("Created custom sv_cheats ConVar with value 1");
+                    sv_cheats_test = new_sv_cheats;
+                }
             }
+        }
+
+        if (!sv_cheats_test) {
+            MessageBoxA(NULL, "Could not find or create sv_cheats ConVar! See log for details.", "Error", MB_OK | MB_ICONERROR);
+            return;
         }
     }
     else {
@@ -409,7 +540,7 @@ void EnableSvCheatsSpoof() {
         sprintf_s(buffer, "Creating spoofed ConVar with name: %s", g_sNewName.c_str());
         LogToFile(buffer);
 
-        g_pSvCheats = new SpoofedConvar("sv_cheats", sNewName);
+        g_pSvCheats = new SpoofedConvar(sv_cheats_test, sNewName);
 
         if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
             Color successColor;
@@ -455,6 +586,7 @@ void EnableSvCheatsSpoof() {
 
             // Execute another visible command to show it's working
             ExecuteCommand("echo [PLUGIN] sv_cheats bypass is now ACTIVE - you can use cheat commands!");
+            ExecuteCommand("sv_cheats 1"); // Set visible sv_cheats to 1 just in case
 
             // Create a message box to indicate success
             MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
@@ -542,7 +674,7 @@ void DumpCommonCvars() {
         "sv_cheats", "sv_allowcheats", "sv_consistency", "sv_lan",
         "host_timescale", "r_drawothermodels", "cl_showfps",
         "cl_cmdrate", "cl_updaterate", "rate", "fps_max",
-        "hurtme", "addcond 66", "sv_gravity"
+        "hurtme", "r_drawothermodels", "sv_gravity"
     };
 
     LogToFile("==== Dumping Common ConVars ====");
@@ -567,24 +699,32 @@ void DumpCommonCvars() {
 
 // Enhanced interface finding with fallback options
 ICvar* FindCvarInterface() {
+    LogToFile("Looking for ICvar interface with enhanced methods...");
+
     // Try multiple DLLs that might contain the interface
     const char* possible_modules[] = {
-        "engine.dll", "vstdlib.dll", "tier0.dll", "client.dll", "materialsystem.dll"
+        "tier0.dll", "vstdlib.dll", "engine.dll", "client.dll", "materialsystem.dll"
     };
 
-    // Interface names to try (from newest to oldest)
+    // Interface names to try - EXPANDED for TF2 version 9543365
     const char* possible_interfaces[] = {
         "VEngineCvar007", "VEngineCvar006", "VEngineCvar005", "VEngineCvar004",
         "VEngineCvar003", "VEngineCvar002", "VEngineCvar001",
-        "VCvar007", "VCvar006", "VCvar005", "VCvar004", "VCvar003", "VCvar002", "VCvar001"
+        "VCvar007", "VCvar006", "VCvar005", "VCvar004", "VCvar003", "VCvar002", "VCvar001",
+        "ICvar007", "ICvar006", "ICvar005", "ICvar004", "ICvar003", "ICvar002", "ICvar001",
+        // TF2-specific possibilities for newer builds
+        "CvarIF007", "CvarIF006", "CvarIF005", "CvarIF004", "CvarIF003", "CvarIF002", "CvarIF001",
+        "VCVAR_INTERFACE_VERSION007", "VCVAR_INTERFACE_VERSION006", "VCVAR_INTERFACE_VERSION005"
     };
 
+    // First try finding standard interface
     for (const char* module_name : possible_modules) {
         HMODULE module = GetModuleHandleA(module_name);
         if (!module) continue;
 
         char buffer[256];
         sprintf_s(buffer, "Trying to find interface in %s", module_name);
+
         LogToFile(buffer);
 
         CreateInterfaceFn factory = (CreateInterfaceFn)GetProcAddress(module, "CreateInterface");
