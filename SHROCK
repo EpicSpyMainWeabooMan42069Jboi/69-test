@@ -290,8 +290,14 @@ private:
     char m_szOriginalValue[128];
 };
 
-// Forward declaration for DisableSvCheatsSpoof
+// Forward declarations for functions
 void DisableSvCheatsSpoof();
+void EnableSvCheatsSpoof();
+void ToggleSvCheatsSpoof();
+bool Initialize();
+void Cleanup();
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+DWORD WINAPI MainThread(LPVOID lpParam);
 
 // Simplified command execution
 void ExecuteCommand(const char* cmd) {
@@ -416,7 +422,6 @@ void EnableSvCheatsSpoof() {
         delete[] randomPart;
 
         g_sNewName = sNewName;
-
         sprintf_s(buffer, "Creating spoofed ConVar with name: %s", g_sNewName.c_str());
         LogToFile(buffer);
 
@@ -454,183 +459,184 @@ void EnableSvCheatsSpoof() {
             MessageBoxA(NULL, "Failed to enable sv_cheats bypass", "Error", MB_OK | MB_ICONERROR);
         }
     }
+}
 
-    // Disable sv_cheats bypass
-    void DisableSvCheatsSpoof() {
-        LogToFile("Attempting to disable sv_cheats bypass...");
+// Disable sv_cheats bypass
+void DisableSvCheatsSpoof() {
+    LogToFile("Attempting to disable sv_cheats bypass...");
 
-        if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
-            g_pSvCheats->SetInt(0);
-            g_bBypassActive = false;
+    if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
+        g_pSvCheats->SetInt(0);
+        g_bBypassActive = false;
 
-            Color infoColor;
-            infoColor.r = 255;
-            infoColor.g = 165;
-            infoColor.b = 0;
-            infoColor.a = 255;
-
-            if (gI_EngineCvar) {
-                gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
-            }
-
-            MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
-        }
-        else {
-            LogToFile("Cannot disable bypass - sv_cheats not spoofed");
-        }
-    }
-
-    // Toggle function for hotkey
-    void ToggleSvCheatsSpoof() {
-        LogToFile("Toggle function called");
-
-        if (!g_bBypassActive) {
-            EnableSvCheatsSpoof();
-        }
-        else {
-            DisableSvCheatsSpoof();
-        }
-    }
-
-    // Keyboard hook callback function - Simplified to reduce potential crashes
-    LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-        if (nCode >= 0 && wParam == WM_KEYDOWN) {
-            KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
-
-            // Only check for INSERT key to minimize interference
-            if (kbStruct->vkCode == VK_INSERT) {
-                LogToFile("INSERT key detected!");
-                ToggleSvCheatsSpoof();
-                return 1; // Prevent other hooks from processing this key
-            }
-        }
-
-        return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-    }
-
-    // Function to initialize the plugin
-    bool Initialize() {
-        // Clear log file
-        std::ofstream logFile("sv_cheats_bypass_log.txt", std::ios::trunc);
-        if (logFile.is_open()) {
-            logFile << "Initializing sv_cheats bypass plugin..." << std::endl;
-            logFile.close();
-        }
-
-        LogToFile("Setting random seed");
-        srand((unsigned)time(NULL));
-
-        // Find ICvar interface
-        gI_EngineCvar = FindCvarInterface();
-        if (!gI_EngineCvar) {
-            LogToFile("ERROR: Failed to get ICvar interface!");
-            MessageBoxA(NULL, "Failed to get ICvar interface!\nTry checking your game version.", "Error", MB_OK | MB_ICONERROR);
-            return false;
-        }
-
-        LogToFile("Successfully initialized ICvar interface");
-
-        // Test if we can find sv_cheats cvar
-        ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
-        if (sv_cheats) {
-            char buffer[256];
-            sprintf_s(buffer, "Found sv_cheats ConVar, current value: %d, flags: 0x%X",
-                sv_cheats->GetInt(), sv_cheats->m_nFlags);
-            LogToFile(buffer);
-        }
-        else {
-            LogToFile("WARNING: Could not find sv_cheats ConVar!");
-        }
-
-        // Display welcome message in console
-        Color welcomeColor;
-        welcomeColor.r = 0;
-        welcomeColor.g = 255;
-        welcomeColor.b = 0;
-        welcomeColor.a = 255;
+        Color infoColor;
+        infoColor.r = 255;
+        infoColor.g = 165;
+        infoColor.b = 0;
+        infoColor.a = 255;
 
         if (gI_EngineCvar) {
-            gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
-            gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " sv_cheats Bypass Plugin Loaded!\n");
-            gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " Press INSERT key to toggle bypass\n");
-            gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
+            gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
         }
 
-        // Set up keyboard hook for the Insert key
-        LogToFile("Setting up keyboard hook");
-        g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
-        if (g_hKeyboardHook == NULL) {
-            LogToFile("ERROR: Failed to set keyboard hook!");
-            MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
-            return false;
+        MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
+    }
+    else {
+        LogToFile("Cannot disable bypass - sv_cheats not spoofed");
+    }
+}
+
+// Toggle function for hotkey
+void ToggleSvCheatsSpoof() {
+    LogToFile("Toggle function called");
+
+    if (!g_bBypassActive) {
+        EnableSvCheatsSpoof();
+    }
+    else {
+        DisableSvCheatsSpoof();
+    }
+}
+
+// Keyboard hook callback function - Simplified to reduce potential crashes
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0 && wParam == WM_KEYDOWN) {
+        KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
+
+        // Only check for INSERT key to minimize interference
+        if (kbStruct->vkCode == VK_INSERT) {
+            LogToFile("INSERT key detected!");
+            ToggleSvCheatsSpoof();
+            return 1; // Prevent other hooks from processing this key
         }
-
-        LogToFile("Keyboard hook set up successfully");
-
-        // Show a message box to indicate successful initialization
-        MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
-
-        return true;
     }
 
-    // Function to clean up
-    void Cleanup() {
-        LogToFile("Cleaning up resources");
+    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+}
 
-        // Disable the bypass if active
-        if (g_bBypassActive) {
-            DisableSvCheatsSpoof();
-        }
-
-        // Clean up the spoofed convar
-        delete g_pSvCheats;
-        g_pSvCheats = nullptr;
-
-        // Unhook keyboard hook
-        if (g_hKeyboardHook != NULL) {
-            UnhookWindowsHookEx(g_hKeyboardHook);
-            g_hKeyboardHook = NULL;
-        }
-
-        LogToFile("Cleanup complete");
+// Function to initialize the plugin
+bool Initialize() {
+    // Clear log file
+    std::ofstream logFile("sv_cheats_bypass_log.txt", std::ios::trunc);
+    if (logFile.is_open()) {
+        logFile << "Initializing sv_cheats bypass plugin..." << std::endl;
+        logFile.close();
     }
 
-    // Thread function for the DLL to run continuously
-    DWORD WINAPI MainThread(LPVOID lpParam) {
-        // Initialize the plugin
-        if (!Initialize()) {
-            return 1;
-        }
+    LogToFile("Setting random seed");
+    srand((unsigned)time(NULL));
 
-        g_bInitialized = true;
-        LogToFile("Main thread initialized successfully");
-
-        // Message loop to keep the thread alive and process keyboard events
-        MSG msg;
-        LogToFile("Entering message loop");
-        while (GetMessage(&msg, NULL, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-
-        return 0;
+    // Find ICvar interface
+    gI_EngineCvar = FindCvarInterface();
+    if (!gI_EngineCvar) {
+        LogToFile("ERROR: Failed to get ICvar interface!");
+        MessageBoxA(NULL, "Failed to get ICvar interface!\nTry checking your game version.", "Error", MB_OK | MB_ICONERROR);
+        return false;
     }
 
-    // DLL entry point
-    BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
-        if (reason == DLL_PROCESS_ATTACH) {
-            DisableThreadLibraryCalls(hModule);
-            // Create a thread with a larger stack size to avoid stack overflows
-            HANDLE hThread = CreateThread(NULL, 1024 * 1024, MainThread, hModule, 0, NULL);
-            if (hThread) {
-                CloseHandle(hThread);
-            }
-        }
-        else if (reason == DLL_PROCESS_DETACH) {
-            if (g_bInitialized) {
-                Cleanup();
-            }
-        }
+    LogToFile("Successfully initialized ICvar interface");
 
-        return TRUE;
+    // Test if we can find sv_cheats cvar
+    ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
+    if (sv_cheats) {
+        char buffer[256];
+        sprintf_s(buffer, "Found sv_cheats ConVar, current value: %d, flags: 0x%X",
+            sv_cheats->GetInt(), sv_cheats->m_nFlags);
+        LogToFile(buffer);
     }
+    else {
+        LogToFile("WARNING: Could not find sv_cheats ConVar!");
+    }
+
+    // Display welcome message in console
+    Color welcomeColor;
+    welcomeColor.r = 0;
+    welcomeColor.g = 255;
+    welcomeColor.b = 0;
+    welcomeColor.a = 255;
+
+    if (gI_EngineCvar) {
+        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
+        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " sv_cheats Bypass Plugin Loaded!\n");
+        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " Press INSERT key to toggle bypass\n");
+        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
+    }
+
+    // Set up keyboard hook for the Insert key
+    LogToFile("Setting up keyboard hook");
+    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+    if (g_hKeyboardHook == NULL) {
+        LogToFile("ERROR: Failed to set keyboard hook!");
+        MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    LogToFile("Keyboard hook set up successfully");
+
+    // Show a message box to indicate successful initialization
+    MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
+
+    return true;
+}
+
+// Function to clean up
+void Cleanup() {
+    LogToFile("Cleaning up resources");
+
+    // Disable the bypass if active
+    if (g_bBypassActive) {
+        DisableSvCheatsSpoof();
+    }
+
+    // Clean up the spoofed convar
+    delete g_pSvCheats;
+    g_pSvCheats = nullptr;
+
+    // Unhook keyboard hook
+    if (g_hKeyboardHook != NULL) {
+        UnhookWindowsHookEx(g_hKeyboardHook);
+        g_hKeyboardHook = NULL;
+    }
+
+    LogToFile("Cleanup complete");
+}
+
+// Thread function for the DLL to run continuously
+DWORD WINAPI MainThread(LPVOID lpParam) {
+    // Initialize the plugin
+    if (!Initialize()) {
+        return 1;
+    }
+
+    g_bInitialized = true;
+    LogToFile("Main thread initialized successfully");
+
+    // Message loop to keep the thread alive and process keyboard events
+    MSG msg;
+    LogToFile("Entering message loop");
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    return 0;
+}
+
+// DLL entry point
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+        // Create a thread with a larger stack size to avoid stack overflows
+        HANDLE hThread = CreateThread(NULL, 1024 * 1024, MainThread, hModule, 0, NULL);
+        if (hThread) {
+            CloseHandle(hThread);
+        }
+    }
+    else if (reason == DLL_PROCESS_DETACH) {
+        if (g_bInitialized) {
+            Cleanup();
+        }
+    }
+
+    return TRUE;
+}
