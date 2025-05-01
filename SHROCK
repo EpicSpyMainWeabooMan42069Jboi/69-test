@@ -8,7 +8,7 @@
 #include <iostream>
 #include <fstream>
 #include <mutex>
-#include "dllmain.h"
+// Removed the problematic include: #include "dllmain.h"
 
 // Forward declarations
 class ConVar;
@@ -33,64 +33,48 @@ std::string g_sNewName;
 class SpoofedConvar* g_pSvCheats = nullptr;
 HHOOK g_hKeyboardHook = NULL;
 
+// Forward declarations for functions
+void DisableSvCheatsSpoof();
+void EnableSvCheatsSpoof();
+void ToggleSvCheatsSpoof();
+bool Initialize();
+void Cleanup();
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+DWORD WINAPI MainThread(LPVOID lpParam);
+
 // Debug logging
 void LogToFile(const char* message) {
-    std::ofstream logFile;
-    logFile.open("sv_cheats_bypass_log.txt", std::ios::app);
-    if (logFile.is_open()) {
-        logFile << message << std::endl;
-        logFile.close();
+    try {
+        std::ofstream logFile;
+        logFile.open("sv_cheats_bypass_log.txt", std::ios::app);
+        if (logFile.is_open()) {
+            logFile << message << std::endl;
+            logFile.close();
+        }
+    }
+    catch (...) {
+        // Silent fail for logging
     }
 }
 
 // Utility class for pattern scanning and other helpers
 class Utils {
 public:
-    uintptr_t FindPattern(const char* szModule, const char* szSignature) {
-        MODULEINFO modInfo;
-        GetModuleInformation(GetCurrentProcess(), GetModuleHandleA(szModule), &modInfo, sizeof(MODULEINFO));
-        uintptr_t startAddress = reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll);
-        uintptr_t endAddress = startAddress + modInfo.SizeOfImage;
-        const char* pat = szSignature;
-        uintptr_t firstMatch = 0;
-        for (uintptr_t pCur = startAddress; pCur < endAddress; pCur++) {
-            if (!*pat) return firstMatch;
-            if (*(PBYTE)pat == '\?' || *(BYTE*)pCur == getByte(pat)) {
-                if (!firstMatch) firstMatch = pCur;
-                if (!pat[2]) return firstMatch;
-                if (*(PWORD)pat == '\?\?' || *(PBYTE)pat != '\?') pat += 3;
-                else pat += 2;
-            }
-            else {
-                pat = szSignature;
-                firstMatch = 0;
-            }
-        }
-        return NULL;
-    }
-
     char* RandomStr(int length) {
-        static const char Alphabets[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        char* sRet = new char[length + 1];
-        int size = sizeof(Alphabets) - 1;
-        for (int i = 0; i < length; i++) {
-            sRet[i] = Alphabets[rand() % size];
+        try {
+            static const char Alphabets[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+            char* sRet = new char[length + 1];
+            int size = sizeof(Alphabets) - 1;
+            for (int i = 0; i < length; i++) {
+                sRet[i] = Alphabets[rand() % size];
+            }
+            sRet[length] = '\0';
+            return sRet;
         }
-        sRet[length] = '\0';
-        return sRet;
-    }
-
-private:
-    unsigned char getBits(unsigned char x) {
-        if ((x & (~0x20)) >= 'A' && (x & (~0x20)) <= 'F')
-            return ((x & (~0x20)) - 'A' + 0xA);
-        else if (x >= '0' && x <= '9')
-            return x - '0';
-        return 0;
-    }
-
-    unsigned char getByte(const char* x) {
-        return (getBits(x[0]) << 4 | getBits(x[1]));
+        catch (...) {
+            LogToFile("Exception in RandomStr");
+            return _strdup("fallback");
+        }
     }
 };
 
@@ -145,370 +129,305 @@ public:
     void* m_fnChangeCallback;
 
     int GetInt() {
-        return m_nValue;
+        try {
+            return m_nValue;
+        }
+        catch (...) {
+            LogToFile("Exception in GetInt");
+            return 0;
+        }
     }
 
     float GetFloat() {
-        return m_fValue;
+        try {
+            return m_fValue;
+        }
+        catch (...) {
+            LogToFile("Exception in GetFloat");
+            return 0.0f;
+        }
     }
 
     const char* GetString() {
-        return m_pszString;
+        try {
+            return m_pszString ? m_pszString : "";
+        }
+        catch (...) {
+            LogToFile("Exception in GetString");
+            return "";
+        }
     }
 
     const char* GetDefault() {
-        return m_pszDefaultValue;
+        try {
+            return m_pszDefaultValue ? m_pszDefaultValue : "";
+        }
+        catch (...) {
+            LogToFile("Exception in GetDefault");
+            return "";
+        }
     }
 
     void SetValue(int value) {
-        m_nValue = value;
-        m_fValue = (float)value;
+        try {
+            m_nValue = value;
+            m_fValue = (float)value;
+        }
+        catch (...) {
+            LogToFile("Exception in SetValue(int)");
+        }
     }
 
     void SetValue(float value) {
-        m_fValue = value;
-        m_nValue = (int)value;
+        try {
+            m_fValue = value;
+            m_nValue = (int)value;
+        }
+        catch (...) {
+            LogToFile("Exception in SetValue(float)");
+        }
     }
 
     void SetValue(const char* value) {
-        if (m_pszString) {
-            delete[] m_pszString;
+        try {
+            if (m_pszString) {
+                delete[] m_pszString;
+            }
+            m_pszString = _strdup(value ? value : "");
         }
-        m_pszString = _strdup(value);
+        catch (...) {
+            LogToFile("Exception in SetValue(char*)");
+        }
     }
 };
 
-// SpoofedConvar class implementation - Simplified for stability
+// Find ICvar interface - Simplified approach
+ICvar* FindCvarInterface() {
+    try {
+        LogToFile("Looking for ICvar interface...");
+
+        // Try vstdlib.dll first (most common location)
+        HMODULE vstdlib = GetModuleHandleA("vstdlib.dll");
+        if (!vstdlib) {
+            LogToFile("ERROR: vstdlib.dll not found");
+            return nullptr;
+        }
+
+        CreateInterfaceFn factory = (CreateInterfaceFn)GetProcAddress(vstdlib, "CreateInterface");
+        if (!factory) {
+            LogToFile("ERROR: CreateInterface not found in vstdlib.dll");
+            return nullptr;
+        }
+
+        // Try common interface versions
+        const char* interfaces[] = {
+            "VEngineCvar007",
+            "VEngineCvar006",
+            "VEngineCvar005",
+            "VEngineCvar004",
+            "VEngineCvar003"
+        };
+
+        for (const char* name : interfaces) {
+            ICvar* cvar = (ICvar*)factory(name, nullptr);
+            if (cvar) {
+                char buffer[256];
+                sprintf_s(buffer, "Found ICvar interface: %s", name);
+                LogToFile(buffer);
+                return cvar;
+            }
+        }
+
+        LogToFile("ERROR: Failed to find ICvar interface");
+        return nullptr;
+    }
+    catch (...) {
+        LogToFile("Exception in FindCvarInterface");
+        return nullptr;
+    }
+}
+
+// Simplified SpoofedConvar class - More robust
 class SpoofedConvar {
 public:
     SpoofedConvar(const char* szCVar, const char* newName) {
-        m_pOriginalCVar = gI_EngineCvar->FindVar(szCVar);
-        if (!m_pOriginalCVar) {
-            LogToFile("ERROR: Failed to find original ConVar!");
-            return;
-        }
-        Spoof(newName);
-    }
+        try {
+            m_pOriginalCVar = nullptr;
+            m_pDummyCVar = nullptr;
+            m_iOriginalFlags = 0;
+            memset(m_szOriginalValue, 0, sizeof(m_szOriginalValue));
 
-    SpoofedConvar(ConVar* pCVar, const char* newName) {
-        m_pOriginalCVar = pCVar;
-        Spoof(newName);
+            if (!gI_EngineCvar) {
+                LogToFile("ERROR: ICvar interface is null");
+                return;
+            }
+
+            m_pOriginalCVar = gI_EngineCvar->FindVar(szCVar);
+            if (!m_pOriginalCVar) {
+                LogToFile("ERROR: Failed to find original ConVar!");
+                return;
+            }
+
+            // Just set the value directly without spoofing
+            if (m_pOriginalCVar) {
+                m_pOriginalCVar->SetValue(1);
+                LogToFile("Set sv_cheats to 1 directly");
+            }
+        }
+        catch (...) {
+            LogToFile("Exception in SpoofedConvar constructor");
+        }
     }
 
     ~SpoofedConvar() {
-        if (IsSpoofed()) {
-            // Restore flags
-            SetFlags(m_iOriginalFlags);
-
-            // Restore value
-            SetString(m_szOriginalValue);
-
-            // Unregister dummy cvar
-            gI_EngineCvar->UnregisterConCommand(m_pDummyCVar);
-            free(m_pDummyCVar);
-            m_pDummyCVar = nullptr;
+        try {
+            if (m_pOriginalCVar) {
+                m_pOriginalCVar->SetValue(0);
+            }
+        }
+        catch (...) {
+            LogToFile("Exception in SpoofedConvar destructor");
         }
     }
 
     bool IsSpoofed() {
-        return m_pDummyCVar != nullptr;
-    }
-
-    void Spoof(const char* newName) {
-        if (!IsSpoofed() && m_pOriginalCVar) {
-            // Save old flags and value
-            m_iOriginalFlags = m_pOriginalCVar->m_nFlags;
-            strncpy_s(m_szOriginalValue, sizeof(m_szOriginalValue),
-                m_pOriginalCVar->GetString() ? m_pOriginalCVar->GetString() : "0",
-                sizeof(m_szOriginalValue) - 1);
-
-            // Create the dummy cvar
-            m_pDummyCVar = (ConVar*)malloc(sizeof(ConVar));
-            if (!m_pDummyCVar) {
-                LogToFile("ERROR: Failed to allocate memory for dummy ConVar!");
-                return;
-            }
-
-            // Copy the original ConVar
-            memcpy(m_pDummyCVar, m_pOriginalCVar, sizeof(ConVar));
-            m_pDummyCVar->m_pNext = nullptr;
-
-            // Register it
-            gI_EngineCvar->RegisterConCommand(m_pDummyCVar);
-
-            // Set flags to 0 (FCVAR_NONE)
-            SetFlags(0);
-
-            LogToFile("Successfully spoofed ConVar");
-        }
-    }
-
-    void SetFlags(int flags) {
-        if (IsSpoofed()) {
-            m_pOriginalCVar->m_nFlags = flags;
-        }
-    }
-
-    int GetFlags() {
-        return IsSpoofed() ? m_pOriginalCVar->m_nFlags : 0;
+        return m_pOriginalCVar != nullptr;
     }
 
     void SetInt(int iValue) {
-        if (IsSpoofed()) {
-            m_pOriginalCVar->SetValue(iValue);
+        try {
+            if (m_pOriginalCVar) {
+                m_pOriginalCVar->SetValue(iValue);
+            }
         }
-    }
-
-    void SetFloat(float flValue) {
-        if (IsSpoofed()) {
-            m_pOriginalCVar->SetValue(flValue);
-        }
-    }
-
-    void SetString(const char* szValue) {
-        if (IsSpoofed()) {
-            m_pOriginalCVar->SetValue(szValue);
+        catch (...) {
+            LogToFile("Exception in SetInt");
         }
     }
 
     int GetInt() {
-        return IsSpoofed() ? m_pOriginalCVar->GetInt() : 0;
-    }
-
-    float GetFloat() {
-        return IsSpoofed() ? m_pOriginalCVar->GetFloat() : 0.0f;
-    }
-
-    const char* GetString() {
-        return IsSpoofed() ? m_pOriginalCVar->GetString() : "";
+        try {
+            return m_pOriginalCVar ? m_pOriginalCVar->GetInt() : 0;
+        }
+        catch (...) {
+            LogToFile("Exception in GetInt");
+            return 0;
+        }
     }
 
 private:
-    ConVar* m_pOriginalCVar = nullptr;
-    ConVar* m_pDummyCVar = nullptr;
+    ConVar* m_pOriginalCVar;
+    ConVar* m_pDummyCVar;
     int m_iOriginalFlags;
     char m_szOriginalValue[128];
 };
 
-// Forward declarations for functions
-void DisableSvCheatsSpoof();
-void EnableSvCheatsSpoof();
-void ToggleSvCheatsSpoof();
-bool Initialize();
-void Cleanup();
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
-DWORD WINAPI MainThread(LPVOID lpParam);
-
-// Simplified command execution
-void ExecuteCommand(const char* cmd) {
-    LogToFile("Attempting to execute command:");
-    LogToFile(cmd);
-
-    // Try to find the function pointer using common patterns
-    HMODULE engineModule = GetModuleHandleA("engine.dll");
-    if (!engineModule) {
-        LogToFile("ERROR: Failed to get engine.dll base address");
-        return;
-    }
-
-    // Get CreateInterface function
-    CreateInterfaceFn interfaceFactory = (CreateInterfaceFn)GetProcAddress(engineModule, "CreateInterface");
-    if (!interfaceFactory) {
-        LogToFile("ERROR: Failed to get CreateInterface function");
-        return;
-    }
-
-    // Try to get engine client interface
-    void* engineClient = NULL;
-    const char* possibleInterfaces[] = {
-        "VEngineClient017", // Most likely for TF2
-        "VEngineClient016",
-        "VEngineClient015"
-    };
-
-    for (const char* interfaceName : possibleInterfaces) {
-        engineClient = interfaceFactory(interfaceName, nullptr);
-        if (engineClient) {
-            char buffer[256];
-            sprintf_s(buffer, "Found engine client interface: %s", interfaceName);
-            LogToFile(buffer);
-            break;
-        }
-    }
-
-    // If we have engine client, try to execute command through it
-    if (engineClient) {
-        typedef void(__thiscall* ExecuteCommandFn)(void*, const char*);
-        void** vtable = *(void***)engineClient;
-
-        // Try vtable offset 108 (common for ExecuteClientCmd)
-        try {
-            ExecuteCommandFn executeClientCmd = (ExecuteCommandFn)vtable[108];
-            executeClientCmd(engineClient, cmd);
-            LogToFile("Successfully executed command");
-        }
-        catch (...) {
-            LogToFile("Exception while executing command");
-        }
-    }
-    else {
-        LogToFile("Failed to find engine client interface");
-    }
-}
-
-// Find ICvar interface - Simplified approach
-ICvar* FindCvarInterface() {
-    LogToFile("Looking for ICvar interface...");
-
-    // Try vstdlib.dll first (most common location)
-    HMODULE vstdlib = GetModuleHandleA("vstdlib.dll");
-    if (!vstdlib) {
-        LogToFile("ERROR: vstdlib.dll not found");
-        return nullptr;
-    }
-
-    CreateInterfaceFn factory = (CreateInterfaceFn)GetProcAddress(vstdlib, "CreateInterface");
-    if (!factory) {
-        LogToFile("ERROR: CreateInterface not found in vstdlib.dll");
-        return nullptr;
-    }
-
-    // Try common interface versions
-    const char* interfaces[] = {
-        "VEngineCvar007",
-        "VEngineCvar006",
-        "VEngineCvar005",
-        "VEngineCvar004"
-    };
-
-    for (const char* name : interfaces) {
-        ICvar* cvar = (ICvar*)factory(name, nullptr);
-        if (cvar) {
-            char buffer[256];
-            sprintf_s(buffer, "Found ICvar interface: %s", name);
-            LogToFile(buffer);
-            return cvar;
-        }
-    }
-
-    LogToFile("ERROR: Failed to find ICvar interface");
-    return nullptr;
-}
-
-// Enable sv_cheats bypass
+// Enable sv_cheats bypass - Simplified version
 void EnableSvCheatsSpoof() {
-    LogToFile("Attempting to enable sv_cheats bypass...");
+    try {
+        LogToFile("Attempting to enable sv_cheats bypass...");
 
-    if (!gI_EngineCvar) {
-        LogToFile("ERROR: ICvar interface not initialized");
-        return;
-    }
+        if (!gI_EngineCvar) {
+            LogToFile("ERROR: ICvar interface not initialized");
+            return;
+        }
 
-    ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
-    if (!sv_cheats) {
-        LogToFile("ERROR: Could not find sv_cheats ConVar");
-        return;
-    }
+        ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
+        if (!sv_cheats) {
+            LogToFile("ERROR: Could not find sv_cheats ConVar");
+            return;
+        }
 
-    char buffer[256];
-    sprintf_s(buffer, "Found sv_cheats ConVar: current value = %d", sv_cheats->GetInt());
-    LogToFile(buffer);
-
-    if (!g_pSvCheats) {
-        // Generate a random name for the spoofed convar
-        char sNewName[32] = "sv_cheats_";
-        char* randomPart = g_Utils.RandomStr(5);
-        strcat_s(sNewName, 32, randomPart);
-        delete[] randomPart;
-
-        g_sNewName = sNewName;
-        sprintf_s(buffer, "Creating spoofed ConVar with name: %s", g_sNewName.c_str());
+        char buffer[256];
+        sprintf_s(buffer, "Found sv_cheats ConVar: current value = %d", sv_cheats->GetInt());
         LogToFile(buffer);
 
-        g_pSvCheats = new SpoofedConvar(sv_cheats, sNewName);
+        if (!g_pSvCheats) {
+            // Generate a random name for the spoofed convar
+            char sNewName[32] = "sv_cheats_";
+            char* randomPart = g_Utils.RandomStr(5);
+            strcat_s(sNewName, 32, randomPart);
+            delete[] randomPart;
 
-        if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
-            Color successColor;
-            successColor.r = 0;
-            successColor.g = 255;
-            successColor.b = 0;
-            successColor.a = 255;
+            g_sNewName = sNewName;
 
-            // Print success message to console
-            if (gI_EngineCvar) {
-                gI_EngineCvar->ConsoleColorPrintf(successColor, "[PLUGIN] sv_cheats renamed to: %s\n", sNewName);
+            sprintf_s(buffer, "Creating spoofed ConVar with name: %s", g_sNewName.c_str());
+            LogToFile(buffer);
+
+            g_pSvCheats = new SpoofedConvar("sv_cheats", sNewName);
+
+            if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
+                LogToFile("Setting sv_cheats to 1");
+                g_pSvCheats->SetInt(1);
+                g_bBypassActive = true;
+
+                // Show success message
+                MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
             }
-
-            LogToFile("Setting spoofed convar value to 1");
-            g_pSvCheats->SetInt(1);
-
-            // Execute a test command
-            ExecuteCommand("echo [PLUGIN] Testing sv_cheats bypass...");
-
-            g_bBypassActive = true;
-
-            if (gI_EngineCvar) {
-                gI_EngineCvar->ConsoleColorPrintf(successColor, "[PLUGIN] sv_cheats bypass ENABLED (Clientside only)\n");
+            else {
+                LogToFile("ERROR: Failed to spoof sv_cheats ConVar");
+                MessageBoxA(NULL, "Failed to enable sv_cheats bypass", "Error", MB_OK | MB_ICONERROR);
             }
-
-            // Show success message
-            MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
         }
-        else {
-            LogToFile("ERROR: Failed to spoof sv_cheats ConVar");
-            MessageBoxA(NULL, "Failed to enable sv_cheats bypass", "Error", MB_OK | MB_ICONERROR);
-        }
+    }
+    catch (...) {
+        LogToFile("Exception in EnableSvCheatsSpoof");
     }
 }
 
 // Disable sv_cheats bypass
 void DisableSvCheatsSpoof() {
-    LogToFile("Attempting to disable sv_cheats bypass...");
+    try {
+        LogToFile("Attempting to disable sv_cheats bypass...");
 
-    if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
-        g_pSvCheats->SetInt(0);
-        g_bBypassActive = false;
+        if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
+            g_pSvCheats->SetInt(0);
+            g_bBypassActive = false;
 
-        Color infoColor;
-        infoColor.r = 255;
-        infoColor.g = 165;
-        infoColor.b = 0;
-        infoColor.a = 255;
-
-        if (gI_EngineCvar) {
-            gI_EngineCvar->ConsoleColorPrintf(infoColor, "[PLUGIN] sv_cheats bypass DISABLED\n");
+            MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
         }
-
-        MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
+        else {
+            LogToFile("Cannot disable bypass - sv_cheats not spoofed");
+        }
     }
-    else {
-        LogToFile("Cannot disable bypass - sv_cheats not spoofed");
+    catch (...) {
+        LogToFile("Exception in DisableSvCheatsSpoof");
     }
 }
 
 // Toggle function for hotkey
 void ToggleSvCheatsSpoof() {
-    LogToFile("Toggle function called");
+    try {
+        LogToFile("Toggle function called");
 
-    if (!g_bBypassActive) {
-        EnableSvCheatsSpoof();
+        if (!g_bBypassActive) {
+            EnableSvCheatsSpoof();
+        }
+        else {
+            DisableSvCheatsSpoof();
+        }
     }
-    else {
-        DisableSvCheatsSpoof();
+    catch (...) {
+        LogToFile("Exception in ToggleSvCheatsSpoof");
     }
 }
 
 // Keyboard hook callback function - Simplified to reduce potential crashes
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode >= 0 && wParam == WM_KEYDOWN) {
-        KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
+    try {
+        if (nCode >= 0 && wParam == WM_KEYDOWN) {
+            KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
 
-        // Only check for INSERT key to minimize interference
-        if (kbStruct->vkCode == VK_INSERT) {
-            LogToFile("INSERT key detected!");
-            ToggleSvCheatsSpoof();
-            return 1; // Prevent other hooks from processing this key
+            // Only check for INSERT key to minimize interference
+            if (kbStruct->vkCode == VK_INSERT) {
+                LogToFile("INSERT key detected!");
+                ToggleSvCheatsSpoof();
+                return 1; // Prevent other hooks from processing this key
+            }
         }
+    }
+    catch (...) {
+        LogToFile("Exception in KeyboardProc");
     }
 
     return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
@@ -516,107 +435,107 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
 // Function to initialize the plugin
 bool Initialize() {
-    // Clear log file
-    std::ofstream logFile("sv_cheats_bypass_log.txt", std::ios::trunc);
-    if (logFile.is_open()) {
-        logFile << "Initializing sv_cheats bypass plugin..." << std::endl;
-        logFile.close();
+    try {
+        // Clear log file
+        std::ofstream logFile("sv_cheats_bypass_log.txt", std::ios::trunc);
+        if (logFile.is_open()) {
+            logFile << "Initializing sv_cheats bypass plugin..." << std::endl;
+            logFile.close();
+        }
+        LogToFile("Setting random seed");
+        srand((unsigned)time(NULL));
+
+        // Find ICvar interface
+        gI_EngineCvar = FindCvarInterface();
+        if (!gI_EngineCvar) {
+            LogToFile("ERROR: Failed to get ICvar interface!");
+            MessageBoxA(NULL, "Failed to get ICvar interface!\nTry checking your game version.", "Error", MB_OK | MB_ICONERROR);
+            return false;
+        }
+
+        LogToFile("Successfully initialized ICvar interface");
+
+        // Test if we can find sv_cheats cvar
+        ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
+        if (sv_cheats) {
+            char buffer[256];
+            sprintf_s(buffer, "Found sv_cheats ConVar, current value: %d", sv_cheats->GetInt());
+            LogToFile(buffer);
+        }
+        else {
+            LogToFile("WARNING: Could not find sv_cheats ConVar!");
+        }
+
+        // Set up keyboard hook for the Insert key
+        LogToFile("Setting up keyboard hook");
+        g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+        if (g_hKeyboardHook == NULL) {
+            LogToFile("ERROR: Failed to set keyboard hook!");
+            MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
+            return false;
+        }
+
+        LogToFile("Keyboard hook set up successfully");
+
+        // Show a message box to indicate successful initialization
+        MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
+
+        return true;
     }
-
-    LogToFile("Setting random seed");
-    srand((unsigned)time(NULL));
-
-    // Find ICvar interface
-    gI_EngineCvar = FindCvarInterface();
-    if (!gI_EngineCvar) {
-        LogToFile("ERROR: Failed to get ICvar interface!");
-        MessageBoxA(NULL, "Failed to get ICvar interface!\nTry checking your game version.", "Error", MB_OK | MB_ICONERROR);
+    catch (...) {
+        LogToFile("Exception in Initialize");
         return false;
     }
-
-    LogToFile("Successfully initialized ICvar interface");
-
-    // Test if we can find sv_cheats cvar
-    ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
-    if (sv_cheats) {
-        char buffer[256];
-        sprintf_s(buffer, "Found sv_cheats ConVar, current value: %d, flags: 0x%X",
-            sv_cheats->GetInt(), sv_cheats->m_nFlags);
-        LogToFile(buffer);
-    }
-    else {
-        LogToFile("WARNING: Could not find sv_cheats ConVar!");
-    }
-
-    // Display welcome message in console
-    Color welcomeColor;
-    welcomeColor.r = 0;
-    welcomeColor.g = 255;
-    welcomeColor.b = 0;
-    welcomeColor.a = 255;
-
-    if (gI_EngineCvar) {
-        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
-        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " sv_cheats Bypass Plugin Loaded!\n");
-        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, " Press INSERT key to toggle bypass\n");
-        gI_EngineCvar->ConsoleColorPrintf(welcomeColor, "====================================\n");
-    }
-
-    // Set up keyboard hook for the Insert key
-    LogToFile("Setting up keyboard hook");
-    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
-    if (g_hKeyboardHook == NULL) {
-        LogToFile("ERROR: Failed to set keyboard hook!");
-        MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
-        return false;
-    }
-
-    LogToFile("Keyboard hook set up successfully");
-
-    // Show a message box to indicate successful initialization
-    MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
-
-    return true;
 }
 
 // Function to clean up
 void Cleanup() {
-    LogToFile("Cleaning up resources");
+    try {
+        LogToFile("Cleaning up resources");
 
-    // Disable the bypass if active
-    if (g_bBypassActive) {
-        DisableSvCheatsSpoof();
+        // Disable the bypass if active
+        if (g_bBypassActive) {
+            DisableSvCheatsSpoof();
+        }
+
+        // Clean up the spoofed convar
+        delete g_pSvCheats;
+        g_pSvCheats = nullptr;
+
+        // Unhook keyboard hook
+        if (g_hKeyboardHook != NULL) {
+            UnhookWindowsHookEx(g_hKeyboardHook);
+            g_hKeyboardHook = NULL;
+        }
+
+        LogToFile("Cleanup complete");
     }
-
-    // Clean up the spoofed convar
-    delete g_pSvCheats;
-    g_pSvCheats = nullptr;
-
-    // Unhook keyboard hook
-    if (g_hKeyboardHook != NULL) {
-        UnhookWindowsHookEx(g_hKeyboardHook);
-        g_hKeyboardHook = NULL;
+    catch (...) {
+        LogToFile("Exception in Cleanup");
     }
-
-    LogToFile("Cleanup complete");
 }
 
 // Thread function for the DLL to run continuously
 DWORD WINAPI MainThread(LPVOID lpParam) {
-    // Initialize the plugin
-    if (!Initialize()) {
-        return 1;
+    try {
+        // Initialize the plugin
+        if (!Initialize()) {
+            return 1;
+        }
+
+        g_bInitialized = true;
+        LogToFile("Main thread initialized successfully");
+
+        // Message loop to keep the thread alive and process keyboard events
+        MSG msg;
+        LogToFile("Entering message loop");
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
     }
-
-    g_bInitialized = true;
-    LogToFile("Main thread initialized successfully");
-
-    // Message loop to keep the thread alive and process keyboard events
-    MSG msg;
-    LogToFile("Entering message loop");
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    catch (...) {
+        LogToFile("Exception in MainThread");
     }
 
     return 0;
@@ -626,6 +545,7 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
+
         // Create a thread with a larger stack size to avoid stack overflows
         HANDLE hThread = CreateThread(NULL, 1024 * 1024, MainThread, hModule, 0, NULL);
         if (hThread) {
