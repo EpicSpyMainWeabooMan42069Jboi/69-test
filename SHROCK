@@ -268,11 +268,24 @@ public:
                 return;
             }
 
-            // Just set the value directly without spoofing
-            if (m_pOriginalCVar) {
-                m_pOriginalCVar->SetValue(1);
-                LogToFile("Set sv_cheats to 1 directly");
-            }
+            // Save original flags
+            m_iOriginalFlags = m_pOriginalCVar->m_nFlags;
+
+            // Remove the protection flags
+            int newFlags = m_iOriginalFlags;
+            newFlags &= ~(1 << 0);  // FCVAR_UNREGISTERED
+            newFlags &= ~(1 << 4);  // FCVAR_CHEAT
+            newFlags &= ~(1 << 8);  // FCVAR_REPLICATED
+            newFlags &= ~(1 << 18); // FCVAR_PROTECTED
+            newFlags &= ~(1 << 19); // FCVAR_SPONLY
+
+            // Set the new flags
+            m_pOriginalCVar->m_nFlags = newFlags;
+
+            // Now we can set the value
+            m_pOriginalCVar->SetValue(1);
+
+            LogToFile("Successfully removed protection flags from sv_cheats");
         }
         catch (...) {
             LogToFile("Exception in SpoofedConvar constructor");
@@ -282,6 +295,8 @@ public:
     ~SpoofedConvar() {
         try {
             if (m_pOriginalCVar) {
+                // Restore original flags
+                m_pOriginalCVar->m_nFlags = m_iOriginalFlags;
                 m_pOriginalCVar->SetValue(0);
             }
         }
@@ -339,7 +354,8 @@ void EnableSvCheatsSpoof() {
         }
 
         char buffer[256];
-        sprintf_s(buffer, "Found sv_cheats ConVar: current value = %d", sv_cheats->GetInt());
+        sprintf_s(buffer, "Found sv_cheats ConVar: current value = %d, flags = 0x%X",
+            sv_cheats->GetInt(), sv_cheats->m_nFlags);
         LogToFile(buffer);
 
         if (!g_pSvCheats) {
