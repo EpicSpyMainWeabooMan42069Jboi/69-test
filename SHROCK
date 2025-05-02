@@ -271,6 +271,11 @@ public:
             // Save original flags
             m_iOriginalFlags = m_pOriginalCVar->m_nFlags;
 
+            // Log original flags
+            char flagBuffer[256];
+            sprintf_s(flagBuffer, "Original sv_cheats flags: 0x%X", m_iOriginalFlags);
+            LogToFile(flagBuffer);
+
             // Remove the protection flags
             int newFlags = m_iOriginalFlags;
             newFlags &= ~(1 << 0);  // FCVAR_UNREGISTERED
@@ -282,8 +287,21 @@ public:
             // Set the new flags
             m_pOriginalCVar->m_nFlags = newFlags;
 
+            // Log new flags
+            sprintf_s(flagBuffer, "New sv_cheats flags: 0x%X", m_pOriginalCVar->m_nFlags);
+            LogToFile(flagBuffer);
+
             // Now we can set the value
             m_pOriginalCVar->SetValue(1);
+
+            // Force the value directly in memory
+            *(int*)(&m_pOriginalCVar->m_nValue) = 1;
+            *(float*)(&m_pOriginalCVar->m_fValue) = 1.0f;
+            LogToFile("Directly modified sv_cheats value in memory");
+
+            // Log the value after setting
+            sprintf_s(flagBuffer, "sv_cheats value after setting: %d", m_pOriginalCVar->GetInt());
+            LogToFile(flagBuffer);
 
             LogToFile("Successfully removed protection flags from sv_cheats");
         }
@@ -337,6 +355,7 @@ private:
     char m_szOriginalValue[128];
 };
 
+
 // Enable sv_cheats bypass - Simplified version
 void EnableSvCheatsSpoof() {
     try {
@@ -375,14 +394,19 @@ void EnableSvCheatsSpoof() {
             if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
                 LogToFile("Setting sv_cheats to 1");
                 g_pSvCheats->SetInt(1);
-                g_bBypassActive = true;
 
+                // Add this debugging code
+                ConVar* sv_cheats_check = gI_EngineCvar->FindVar("sv_cheats");
+                if (sv_cheats_check) {
+                    char checkBuffer[256];
+                    sprintf_s(checkBuffer, "After bypass: sv_cheats value = %d, flags = 0x%X",
+                        sv_cheats_check->GetInt(), sv_cheats_check->m_nFlags);
+                    LogToFile(checkBuffer);
+                }
+
+                g_bBypassActive = true;
                 // Show success message
                 MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
-            }
-            else {
-                LogToFile("ERROR: Failed to spoof sv_cheats ConVar");
-                MessageBoxA(NULL, "Failed to enable sv_cheats bypass", "Error", MB_OK | MB_ICONERROR);
             }
         }
     }
