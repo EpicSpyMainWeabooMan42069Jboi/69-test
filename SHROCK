@@ -1,602 +1,535 @@
-#include "pch.h"
-#include <Windows.h>
-#include <cstring>
-#include <stdio.h>
-#include <Psapi.h>
-#include <time.h>
-#include <string>
-#include <iostream>
-#include <fstream>
-#include <mutex>
-// Removed the problematic include: #include "dllmain.h"
 
-// Forward declarations
-class ConVar;
-class ICvar;
-
-// Define CreateInterfaceFn type for Source Engine interfaces
-using CreateInterfaceFn = void* (*)(const char*, int*);
-
-// Simple color struct for console output
-struct Color {
-    unsigned char r;
-    unsigned char g;
-    unsigned char b;
-    unsigned char a;
-};
-
-// Global variables
-ICvar* gI_EngineCvar = nullptr;
-bool g_bBypassActive = false;
-bool g_bInitialized = false;
-std::string g_sNewName;
-class SpoofedConvar* g_pSvCheats = nullptr;
-HHOOK g_hKeyboardHook = NULL;
-
-// Forward declarations for functions
-void DisableSvCheatsSpoof();
-void EnableSvCheatsSpoof();
-void ToggleSvCheatsSpoof();
-bool Initialize();
-void Cleanup();
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
-DWORD WINAPI MainThread(LPVOID lpParam);
-
-// Debug logging
-void LogToFile(const char* message) {
-    try {
-        std::ofstream logFile;
-        logFile.open("sv_cheats_bypass_log.txt", std::ios::app);
-        if (logFile.is_open()) {
-            logFile << message << std::endl;
-            logFile.close();
-        }
-    }
-    catch (...) {
-        // Silent fail for logging
-    }
-}
-
-// Utility class for pattern scanning and other helpers
-class Utils {
-public:
-    char* RandomStr(int length) {
-        try {
-            static const char Alphabets[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-            char* sRet = new char[length + 1];
-            int size = sizeof(Alphabets) - 1;
-            for (int i = 0; i < length; i++) {
-                sRet[i] = Alphabets[rand() % size];
-            }
-            sRet[length] = '\0';
-            return sRet;
-        }
-        catch (...) {
-            LogToFile("Exception in RandomStr");
-            return _strdup("fallback");
-        }
-    }
-};
-
-Utils g_Utils;
-
-// ICvar interface definition - Simplified for stability
-class ICvar {
-public:
-    virtual void                   Unknown00() = 0;
-    virtual void                   Unknown01() = 0;
-    virtual void                   Unknown02() = 0;
-    virtual void                   Unknown03() = 0;
-    virtual void                   Unknown04() = 0;
-    virtual void                   Unknown05() = 0;
-    virtual void                   Unknown06() = 0;
-    virtual void                   Unknown07() = 0;
-    virtual void                   Unknown08() = 0;
-    virtual void                   Unknown09() = 0;
-    virtual void                   Unknown10() = 0;
-    virtual void                   Unknown11() = 0;
-    virtual void                   RegisterConCommand(ConVar* pCommandBase) = 0;
-    virtual void                   UnregisterConCommand(ConVar* pCommandBase) = 0;
-    virtual void                   Unknown14() = 0;
-    virtual void                   Unknown15() = 0;
-    virtual ConVar* FindVar(const char* var_name) = 0;
-    virtual void                   Unknown17() = 0;
-    virtual void                   Unknown18() = 0;
-    virtual void                   Unknown19() = 0;
-    virtual void                   ConsoleColorPrintf(const Color& clr, const char* pFormat, ...) = 0;
-};
-
-// ConVar class definition - Simplified for stability
-class ConVar {
-public:
-    void* m_pVMT;
-    ConVar* m_pNext;
-    bool m_bRegistered;
-    const char* m_pszName;
-    const char* m_pszHelpString;
-    int m_nFlags;
-    char pad_0x0018[0x4];
-    ConVar* m_pParent;
-    const char* m_pszDefaultValue;
-    char* m_pszString;
-    int m_StringLength;
-    float m_fValue;
-    int m_nValue;
-    bool m_bHasMin;
-    float m_fMinVal;
-    bool m_bHasMax;
-    float m_fMaxVal;
-    void* m_fnChangeCallback;
-
-    int GetInt() {
-        try {
-            return m_nValue;
-        }
-        catch (...) {
-            LogToFile("Exception in GetInt");
-            return 0;
-        }
-    }
-
-    float GetFloat() {
-        try {
-            return m_fValue;
-        }
-        catch (...) {
-            LogToFile("Exception in GetFloat");
-            return 0.0f;
-        }
-    }
-
-    const char* GetString() {
-        try {
-            return m_pszString ? m_pszString : "";
-        }
-        catch (...) {
-            LogToFile("Exception in GetString");
-            return "";
-        }
-    }
-
-    const char* GetDefault() {
-        try {
-            return m_pszDefaultValue ? m_pszDefaultValue : "";
-        }
-        catch (...) {
-            LogToFile("Exception in GetDefault");
-            return "";
-        }
-    }
-
-    void SetValue(int value) {
-        try {
-            m_nValue = value;
-            m_fValue = (float)value;
-        }
-        catch (...) {
-            LogToFile("Exception in SetValue(int)");
-        }
-    }
-
-    void SetValue(float value) {
-        try {
-            m_fValue = value;
-            m_nValue = (int)value;
-        }
-        catch (...) {
-            LogToFile("Exception in SetValue(float)");
-        }
-    }
-
-    void SetValue(const char* value) {
-        try {
-            if (m_pszString) {
-                delete[] m_pszString;
-            }
-            m_pszString = _strdup(value ? value : "");
-        }
-        catch (...) {
-            LogToFile("Exception in SetValue(char*)");
-        }
-    }
-};
-
-// Find ICvar interface - Simplified approach
-ICvar* FindCvarInterface() {
-    try {
-        LogToFile("Looking for ICvar interface...");
-
-        // Try vstdlib.dll first (most common location)
-        HMODULE vstdlib = GetModuleHandleA("vstdlib.dll");
-        if (!vstdlib) {
-            LogToFile("ERROR: vstdlib.dll not found");
-            return nullptr;
-        }
-
-        CreateInterfaceFn factory = (CreateInterfaceFn)GetProcAddress(vstdlib, "CreateInterface");
-        if (!factory) {
-            LogToFile("ERROR: CreateInterface not found in vstdlib.dll");
-            return nullptr;
-        }
-
-        // Try common interface versions
-        const char* interfaces[] = {
-            "VEngineCvar007",
-            "VEngineCvar006",
-            "VEngineCvar005",
-            "VEngineCvar004",
-            "VEngineCvar003"
-        };
-
-        for (const char* name : interfaces) {
-            ICvar* cvar = (ICvar*)factory(name, nullptr);
-            if (cvar) {
-                char buffer[256];
-                sprintf_s(buffer, "Found ICvar interface: %s", name);
-                LogToFile(buffer);
-                return cvar;
-            }
-        }
-
-        LogToFile("ERROR: Failed to find ICvar interface");
-        return nullptr;
-    }
-    catch (...) {
-        LogToFile("Exception in FindCvarInterface");
-        return nullptr;
-    }
-}
-
-// Simplified SpoofedConvar class - More robust
-class SpoofedConvar {
-public:
-    SpoofedConvar(const char* szCVar, const char* newName) {
-        try {
-            m_pOriginalCVar = nullptr;
-            m_pDummyCVar = nullptr;
-            m_iOriginalFlags = 0;
-            memset(m_szOriginalValue, 0, sizeof(m_szOriginalValue));
-
-            if (!gI_EngineCvar) {
-                LogToFile("ERROR: ICvar interface is null");
-                return;
-            }
-
-            m_pOriginalCVar = gI_EngineCvar->FindVar(szCVar);
-            if (!m_pOriginalCVar) {
-                LogToFile("ERROR: Failed to find original ConVar!");
-                return;
-            }
-
-            // Save original flags
-            m_iOriginalFlags = m_pOriginalCVar->m_nFlags;
-
-            // Log original flags
-            char flagBuffer[256];
-            sprintf_s(flagBuffer, "Original sv_cheats flags: 0x%X", m_iOriginalFlags);
-            LogToFile(flagBuffer);
-
-            // Remove the protection flags
-            int newFlags = m_iOriginalFlags;
-            newFlags &= ~(1 << 0);  // FCVAR_UNREGISTERED
-            newFlags &= ~(1 << 4);  // FCVAR_CHEAT
-            newFlags &= ~(1 << 8);  // FCVAR_REPLICATED
-            newFlags &= ~(1 << 18); // FCVAR_PROTECTED
-            newFlags &= ~(1 << 19); // FCVAR_SPONLY
-
-            // Set the new flags
-            m_pOriginalCVar->m_nFlags = newFlags;
-
-            // Log new flags
-            sprintf_s(flagBuffer, "New sv_cheats flags: 0x%X", m_pOriginalCVar->m_nFlags);
-            LogToFile(flagBuffer);
-
-            // Now we can set the value
-            m_pOriginalCVar->SetValue(1);
-
-            // Force the value directly in memory
-            *(int*)(&m_pOriginalCVar->m_nValue) = 1;
-            *(float*)(&m_pOriginalCVar->m_fValue) = 1.0f;
-            LogToFile("Directly modified sv_cheats value in memory");
-
-            // Log the value after setting
-            sprintf_s(flagBuffer, "sv_cheats value after setting: %d", m_pOriginalCVar->GetInt());
-            LogToFile(flagBuffer);
-
-            LogToFile("Successfully removed protection flags from sv_cheats");
-        }
-        catch (...) {
-            LogToFile("Exception in SpoofedConvar constructor");
-        }
-    }
-
-    ~SpoofedConvar() {
-        try {
-            if (m_pOriginalCVar) {
-                // Restore original flags
-                m_pOriginalCVar->m_nFlags = m_iOriginalFlags;
-                m_pOriginalCVar->SetValue(0);
-            }
-        }
-        catch (...) {
-            LogToFile("Exception in SpoofedConvar destructor");
-        }
-    }
-
-    bool IsSpoofed() {
-        return m_pOriginalCVar != nullptr;
-    }
-
-    void SetInt(int iValue) {
-        try {
-            if (m_pOriginalCVar) {
-                m_pOriginalCVar->SetValue(iValue);
-            }
-        }
-        catch (...) {
-            LogToFile("Exception in SetInt");
-        }
-    }
-
-    int GetInt() {
-        try {
-            return m_pOriginalCVar ? m_pOriginalCVar->GetInt() : 0;
-        }
-        catch (...) {
-            LogToFile("Exception in GetInt");
-            return 0;
-        }
-    }
-
-private:
-    ConVar* m_pOriginalCVar;
-    ConVar* m_pDummyCVar;
-    int m_iOriginalFlags;
-    char m_szOriginalValue[128];
-};
-
-
-// Enable sv_cheats bypass - Simplified version
-void EnableSvCheatsSpoof() {
-    try {
-        LogToFile("Attempting to enable sv_cheats bypass...");
-
-        if (!gI_EngineCvar) {
-            LogToFile("ERROR: ICvar interface not initialized");
-            return;
-        }
-
-        ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
-        if (!sv_cheats) {
-            LogToFile("ERROR: Could not find sv_cheats ConVar");
-            return;
-        }
-
-        char buffer[256];
-        sprintf_s(buffer, "Found sv_cheats ConVar: current value = %d, flags = 0x%X",
-            sv_cheats->GetInt(), sv_cheats->m_nFlags);
-        LogToFile(buffer);
-
-        if (!g_pSvCheats) {
-            // Generate a random name for the spoofed convar
-            char sNewName[32] = "sv_cheats_";
-            char* randomPart = g_Utils.RandomStr(5);
-            strcat_s(sNewName, 32, randomPart);
-            delete[] randomPart;
-
-            g_sNewName = sNewName;
-
-            sprintf_s(buffer, "Creating spoofed ConVar with name: %s", g_sNewName.c_str());
-            LogToFile(buffer);
-
-            g_pSvCheats = new SpoofedConvar("sv_cheats", sNewName);
-
-            if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
-                LogToFile("Setting sv_cheats to 1");
-                g_pSvCheats->SetInt(1);
-
-                // Add this debugging code
-                ConVar* sv_cheats_check = gI_EngineCvar->FindVar("sv_cheats");
-                if (sv_cheats_check) {
-                    char checkBuffer[256];
-                    sprintf_s(checkBuffer, "After bypass: sv_cheats value = %d, flags = 0x%X",
-                        sv_cheats_check->GetInt(), sv_cheats_check->m_nFlags);
-                    LogToFile(checkBuffer);
-                }
-
-                g_bBypassActive = true;
-                // Show success message
-                MessageBoxA(NULL, "sv_cheats bypass ENABLED", "Success", MB_OK | MB_ICONINFORMATION);
-            }
-        }
-    }
-    catch (...) {
-        LogToFile("Exception in EnableSvCheatsSpoof");
-    }
-}
-
-// Disable sv_cheats bypass
-void DisableSvCheatsSpoof() {
-    try {
-        LogToFile("Attempting to disable sv_cheats bypass...");
-
-        if (g_pSvCheats && g_pSvCheats->IsSpoofed()) {
-            g_pSvCheats->SetInt(0);
-            g_bBypassActive = false;
-
-            MessageBoxA(NULL, "sv_cheats bypass DISABLED", "Status", MB_OK | MB_ICONINFORMATION);
-        }
-        else {
-            LogToFile("Cannot disable bypass - sv_cheats not spoofed");
-        }
-    }
-    catch (...) {
-        LogToFile("Exception in DisableSvCheatsSpoof");
-    }
-}
-
-// Toggle function for hotkey
-void ToggleSvCheatsSpoof() {
-    try {
-        LogToFile("Toggle function called");
-
-        if (!g_bBypassActive) {
-            EnableSvCheatsSpoof();
-        }
-        else {
-            DisableSvCheatsSpoof();
-        }
-    }
-    catch (...) {
-        LogToFile("Exception in ToggleSvCheatsSpoof");
-    }
-}
-
-// Keyboard hook callback function - Simplified to reduce potential crashes
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    try {
-        if (nCode >= 0 && wParam == WM_KEYDOWN) {
-            KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
-
-            // Only check for INSERT key to minimize interference
-            if (kbStruct->vkCode == VK_INSERT) {
-                LogToFile("INSERT key detected!");
-                ToggleSvCheatsSpoof();
-                return 1; // Prevent other hooks from processing this key
-            }
-        }
-    }
-    catch (...) {
-        LogToFile("Exception in KeyboardProc");
-    }
-
-    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-}
-
-// Function to initialize the plugin
-bool Initialize() {
-    try {
-        // Clear log file
-        std::ofstream logFile("sv_cheats_bypass_log.txt", std::ios::trunc);
-        if (logFile.is_open()) {
-            logFile << "Initializing sv_cheats bypass plugin..." << std::endl;
-            logFile.close();
-        }
-        LogToFile("Setting random seed");
-        srand((unsigned)time(NULL));
-
-        // Find ICvar interface
-        gI_EngineCvar = FindCvarInterface();
-        if (!gI_EngineCvar) {
-            LogToFile("ERROR: Failed to get ICvar interface!");
-            MessageBoxA(NULL, "Failed to get ICvar interface!\nTry checking your game version.", "Error", MB_OK | MB_ICONERROR);
-            return false;
-        }
-
-        LogToFile("Successfully initialized ICvar interface");
-
-        // Test if we can find sv_cheats cvar
-        ConVar* sv_cheats = gI_EngineCvar->FindVar("sv_cheats");
-        if (sv_cheats) {
-            char buffer[256];
-            sprintf_s(buffer, "Found sv_cheats ConVar, current value: %d", sv_cheats->GetInt());
-            LogToFile(buffer);
-        }
-        else {
-            LogToFile("WARNING: Could not find sv_cheats ConVar!");
-        }
-
-        // Set up keyboard hook for the Insert key
-        LogToFile("Setting up keyboard hook");
-        g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
-        if (g_hKeyboardHook == NULL) {
-            LogToFile("ERROR: Failed to set keyboard hook!");
-            MessageBoxA(NULL, "Failed to set keyboard hook!", "Error", MB_OK | MB_ICONERROR);
-            return false;
-        }
-
-        LogToFile("Keyboard hook set up successfully");
-
-        // Show a message box to indicate successful initialization
-        MessageBoxA(NULL, "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.", "Plugin Loaded", MB_OK | MB_ICONINFORMATION);
-
-        return true;
-    }
-    catch (...) {
-        LogToFile("Exception in Initialize");
-        return false;
-    }
-}
-
-// Function to clean up
-void Cleanup() {
-    try {
-        LogToFile("Cleaning up resources");
-
-        // Disable the bypass if active
-        if (g_bBypassActive) {
-            DisableSvCheatsSpoof();
-        }
-
-        // Clean up the spoofed convar
-        delete g_pSvCheats;
-        g_pSvCheats = nullptr;
-
-        // Unhook keyboard hook
-        if (g_hKeyboardHook != NULL) {
-            UnhookWindowsHookEx(g_hKeyboardHook);
-            g_hKeyboardHook = NULL;
-        }
-
-        LogToFile("Cleanup complete");
-    }
-    catch (...) {
-        LogToFile("Exception in Cleanup");
-    }
-}
-
-// Thread function for the DLL to run continuously
-DWORD WINAPI MainThread(LPVOID lpParam) {
-    try {
-        // Initialize the plugin
-        if (!Initialize()) {
-            return 1;
-        }
-
-        g_bInitialized = true;
-        LogToFile("Main thread initialized successfully");
-
-        // Message loop to keep the thread alive and process keyboard events
-        MSG msg;
-        LogToFile("Entering message loop");
-        while (GetMessage(&msg, NULL, 0, 0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-    }
-    catch (...) {
-        LogToFile("Exception in MainThread");
-    }
-
-    return 0;
-}
-
-// DLL entry point
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
-    if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hModule);
-
-        // Create a thread with a larger stack size to avoid stack overflows
-        HANDLE hThread = CreateThread(NULL, 1024 * 1024, MainThread, hModule, 0, NULL);
-        if (hThread) {
-            CloseHandle(hThread);
-        }
-    }
-    else if (reason == DLL_PROCESS_DETACH) {
-        if (g_bInitialized) {
-            Cleanup();
-        }
-    }
-
-    return TRUE;
-}
+import os
+import sys
+import time
+import random
+import string
+import ctypes
+import logging
+import psutil
+import pymem
+import pymem.process
+from ctypes import wintypes
+from datetime import datetime
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+
+# Set up logging
+logging.basicConfig(
+    filename='sv_cheats_bypass_log.txt',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='w'
+)
+
+# Constants for Windows API
+WH_KEYBOARD_LL = 13
+WM_KEYDOWN = 0x0100
+VK_INSERT = 0x2D
+
+# Global variables
+bypass_active = False
+keyboard_hook = None
+pm = None  # Pymem instance
+game_process = None
+sv_cheats_address = None
+original_flags = 0
+original_value = 0
+
+# ConVar offsets - these would need to be updated for specific games
+CONVAR_NAME_OFFSET = 0x0C
+CONVAR_FLAGS_OFFSET = 0x14
+CONVAR_VALUE_OFFSET = 0x30
+CONVAR_FLOAT_VALUE_OFFSET = 0x2C
+CONVAR_STRING_OFFSET = 0x24
+
+# Flag definitions
+FCVAR_UNREGISTERED = (1 << 0)
+FCVAR_DEVELOPMENTONLY = (1 << 1)
+FCVAR_GAMEDLL = (1 << 2)
+FCVAR_CLIENTDLL = (1 << 3)
+FCVAR_CHEAT = (1 << 4)
+FCVAR_PROTECTED = (1 << 5)
+FCVAR_SPONLY = (1 << 6)
+FCVAR_ARCHIVE = (1 << 7)
+FCVAR_REPLICATED = (1 << 8)
+
+def random_string(length):
+    """Generate a random string of fixed length"""
+    letters = string.ascii_letters
+    return ''.join(random.choice(letters) for _ in range(length))
+
+def find_game_process(game_names):
+    """Find the game process by name"""
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            for game_name in game_names:
+                if game_name.lower() in proc.info['name'].lower():
+                    logging.info(f"Found game process: {proc.info['name']} (PID: {proc.info['pid']})")
+                    return proc.info['pid']
+        return None
+    except Exception as e:
+        logging.error(f"Error finding game process: {str(e)}")
+        return None
+
+def find_cvar_interface():
+    """Find the ICvar interface in the game memory"""
+    try:
+        logging.info("Looking for ICvar interface...")
+        
+        # Try to find vstdlib.dll module
+        vstdlib = None
+        for module in pm.list_modules():
+            if module.name.lower() == "vstdlib.dll":
+                vstdlib = module
+                break
+        
+        if not vstdlib:
+            logging.error("vstdlib.dll not found")
+            return None
+            
+        logging.info(f"Found vstdlib.dll at 0x{vstdlib.lpBaseOfDll:X}")
+        
+        # This part is highly game-specific and would require pattern scanning
+        # For demonstration, we'll use a simplified approach
+        
+        # Try to find CreateInterface function
+        create_interface = pm.read_bytes(vstdlib.lpBaseOfDll, 0x1000)
+        # In a real implementation, you would scan for the CreateInterface pattern
+        
+        # For demonstration, we'll assume we found the ICvar interface
+        # In reality, this would require more complex pattern scanning and pointer following
+        logging.info("Successfully found ICvar interface (simulated)")
+        return True
+    except Exception as e:
+        logging.error(f"Error finding ICvar interface: {str(e)}")
+        return None
+
+def find_convar(name):
+    """Find a ConVar by name in the game memory"""
+    try:
+        logging.info(f"Looking for ConVar: {name}")
+        
+        # In a real implementation, this would involve:
+        # 1. Finding the ConVar list head pointer
+        # 2. Traversing the linked list of ConVars
+        # 3. Checking each ConVar's name against the target name
+        
+        # For demonstration, we'll use a simplified approach with pattern scanning
+        
+        # Example pattern for sv_cheats (this would be game-specific)
+        pattern = b"sv_cheats\x00"
+        
+        # Search for the pattern in the game's memory
+        matches = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=True)
+        
+        if not matches:
+            logging.error(f"Could not find {name} ConVar")
+            return None
+            
+        # For each match, check if it's actually a ConVar
+        for match in matches:
+            try:
+                # Check if this is a valid ConVar by reading its structure
+                # This is a simplified check and would need to be more robust in practice
+                possible_convar_addr = match - CONVAR_NAME_OFFSET
+                flags = pm.read_int(possible_convar_addr + CONVAR_FLAGS_OFFSET)
+                
+                # If it has reasonable flags, it might be our ConVar
+                if 0 <= flags <= 0xFFFF:
+                    value = pm.read_int(possible_convar_addr + CONVAR_VALUE_OFFSET)
+                    logging.info(f"Found potential {name} at 0x{possible_convar_addr:X}, value={value}, flags=0x{flags:X}")
+                    return possible_convar_addr
+            except Exception:
+                continue
+                
+        logging.error(f"Could not find valid {name} ConVar")
+        return None
+    except Exception as e:
+        logging.error(f"Error finding ConVar {name}: {str(e)}")
+        return None
+
+def enable_sv_cheats_bypass():
+    global bypass_active, original_flags, original_value
+    
+    try:
+        if not sv_cheats_address:
+            messagebox.showerror("Error", "sv_cheats ConVar not found!")
+            return
+            
+        logging.info("Attempting to enable sv_cheats bypass...")
+        
+        # Save original values
+        original_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+        original_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+        
+        logging.info(f"Original sv_cheats flags: 0x{original_flags:X}, value: {original_value}")
+        
+        # Remove protection flags
+        new_flags = original_flags
+        new_flags &= ~FCVAR_CHEAT
+        new_flags &= ~FCVAR_REPLICATED
+        new_flags &= ~FCVAR_PROTECTED
+        new_flags &= ~FCVAR_SPONLY
+        
+        # Write the new flags to memory
+        pm.write_int(sv_cheats_address + CONVAR_FLAGS_OFFSET, new_flags)
+        
+        # Set sv_cheats to 1
+        pm.write_int(sv_cheats_address + CONVAR_VALUE_OFFSET, 1)
+        pm.write_float(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET, 1.0)
+        
+        # Verify the changes
+        current_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+        current_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+        
+        logging.info(f"After bypass: sv_cheats flags = 0x{current_flags:X}, value = {current_value}")
+        
+        bypass_active = True
+        messagebox.showinfo("Success", "sv_cheats bypass ENABLED")
+    except Exception as e:
+        logging.error(f"Exception in enable_sv_cheats_bypass: {str(e)}")
+        messagebox.showerror("Error", f"Failed to enable bypass: {str(e)}")
+
+def disable_sv_cheats_bypass():
+    global bypass_active
+    
+    try:
+        if not sv_cheats_address:
+            return
+            
+        logging.info("Attempting to disable sv_cheats bypass...")
+        
+        # Restore original flags and value
+        pm.write_int(sv_cheats_address + CONVAR_FLAGS_OFFSET, original_flags)
+        pm.write_int(sv_cheats_address + CONVAR_VALUE_OFFSET, original_value)
+        pm.write_float(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET, float(original_value))
+        
+        # Verify the changes
+        current_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+        current_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+        
+        logging.info(f"After restore: sv_cheats flags = 0x{current_flags:X}, value = {current_value}")
+        
+        bypass_active = False
+        messagebox.showinfo("Status", "sv_cheats bypass DISABLED")
+    except Exception as e:
+        logging.error(f"Exception in disable_sv_cheats_bypass: {str(e)}")
+
+def toggle_sv_cheats_bypass():
+    try:
+        logging.info("Toggle function called")
+        if not bypass_active:
+            enable_sv_cheats_bypass()
+        else:
+            disable_sv_cheats_bypass()
+    except Exception as e:
+        logging.error(f"Exception in toggle_sv_cheats_bypass: {str(e)}")
+
+# Keyboard hook callback function
+def low_level_keyboard_handler(nCode, wParam, lParam):
+    try:
+        if nCode >= 0 and wParam == WM_KEYDOWN:
+            kb_struct = ctypes.cast(lParam, ctypes.POINTER(ctypes.c_ulong))
+            vk_code = kb_struct[0]
+            
+            # Check for INSERT key
+            if vk_code == VK_INSERT:
+                logging.info("INSERT key detected!")
+                toggle_sv_cheats_bypass()
+                return 1  # Prevent other hooks from processing this key
+    except Exception as e:
+        logging.error(f"Exception in keyboard handler: {str(e)}")
+    
+    # Call the next hook
+    return ctypes.windll.user32.CallNextHookEx(keyboard_hook, nCode, wParam, lParam)
+
+def set_keyboard_hook():
+    global keyboard_hook
+    
+    try:
+        logging.info("Setting up keyboard hook")
+        
+        # Define the callback function type
+        CMPFUNC = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))
+        pointer = CMPFUNC(low_level_keyboard_handler)
+        
+        # Set the hook
+        keyboard_hook = ctypes.windll.user32.SetWindowsHookExA(
+            WH_KEYBOARD_LL, 
+            pointer, 
+            ctypes.windll.kernel32.GetModuleHandleA(None), 
+            0
+        )
+        
+        if not keyboard_hook:
+            logging.error("Failed to set keyboard hook!")
+            messagebox.showerror("Error", "Failed to set keyboard hook!")
+            return False
+            
+        logging.info("Keyboard hook set up successfully")
+        return True
+    except Exception as e:
+        logging.error(f"Exception in set_keyboard_hook: {str(e)}")
+        return False
+
+def cleanup():
+    global keyboard_hook, pm
+    
+    try:
+        logging.info("Cleaning up resources")
+        
+        # Disable the bypass if active
+        if bypass_active:
+            disable_sv_cheats_bypass()
+        
+        # Unhook keyboard hook
+        if keyboard_hook:
+            ctypes.windll.user32.UnhookWindowsHookEx(keyboard_hook)
+            keyboard_hook = None
+        
+        # Close Pymem instance
+        if pm:
+            pm.close_process()
+            
+        logging.info("Cleanup complete")
+    except Exception as e:
+        logging.error(f"Exception in cleanup: {str(e)}")
+
+def initialize():
+    global pm, sv_cheats_address
+    
+    try:
+        # Clear log file
+        with open('sv_cheats_bypass_log.txt', 'w') as f:
+            f.write("Initializing sv_cheats bypass plugin...\n")
+        
+        # Set random seed
+        random.seed(time.time())
+        
+        # Find game process
+        game_names = ["hl2.exe", "csgo.exe", "portal2.exe", "left4dead2.exe", "tf2.exe"]
+        game_pid = find_game_process(game_names)
+        
+        if not game_pid:
+            logging.error("Game process not found!")
+            messagebox.showerror("Error", "Game process not found! Make sure the game is running.")
+            return False
+        
+        # Open the process
+        try:
+            pm = pymem.Pymem(game_pid)
+            logging.info(f"Successfully opened game process (PID: {game_pid})")
+        except Exception as e:
+            logging.error(f"Failed to open game process: {str(e)}")
+            messagebox.showerror("Error", f"Failed to open game process: {str(e)}")
+            return False
+        
+        # Find ICvar interface
+        if not find_cvar_interface():
+            logging.error("Failed to find ICvar interface!")
+            messagebox.showerror("Error", "Failed to find ICvar interface!")
+            return False
+        
+        # Find sv_cheats ConVar
+        sv_cheats_address = find_convar("sv_cheats")
+        if not sv_cheats_address:
+            logging.error("Failed to find sv_cheats ConVar!")
+            messagebox.showerror("Error", "Failed to find sv_cheats ConVar!")
+            return False
+        
+        # Set up keyboard hook
+        if not set_keyboard_hook():
+            return False
+        
+        messagebox.showinfo("Plugin Loaded", "sv_cheats Bypass Plugin Loaded!\nPress INSERT key to toggle bypass.")
+        return True
+    except Exception as e:
+        logging.error(f"Exception in initialize: {str(e)}")
+        messagebox.showerror("Error", f"Initialization error: {str(e)}")
+        return False
+
+class SvCheatsApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("sv_cheats Bypass Tool")
+        self.root.geometry("400x300")
+        self.root.resizable(False, False)
+        
+        # Create UI elements
+        self.label = tk.Label(root, text="sv_cheats Bypass Tool", font=("Arial", 14, "bold"))
+        self.label.pack(pady=10)
+        
+        self.game_label = tk.Label(root, text="Game: Not connected", font=("Arial", 10))
+        self.game_label.pack(pady=5)
+        
+        self.status_label = tk.Label(root, text="Status: Inactive", font=("Arial", 12))
+        self.status_label.pack(pady=5)
+self.value_label = tk.Label(root, text="sv_cheats value: Unknown", font=("Arial", 10))
+        self.value_label.pack(pady=5)
+        
+        self.flags_label = tk.Label(root, text="Flags: Unknown", font=("Arial", 10))
+        self.flags_label.pack(pady=5)
+        
+        # Buttons frame
+        self.button_frame = tk.Frame(root)
+        self.button_frame.pack(pady=10)
+        
+        self.toggle_button = tk.Button(self.button_frame, text="Toggle Bypass", command=self.toggle_bypass, width=15)
+        self.toggle_button.grid(row=0, column=0, padx=5)
+        
+        self.refresh_button = tk.Button(self.button_frame, text="Refresh Status", command=self.refresh_status, width=15)
+        self.refresh_button.grid(row=0, column=1, padx=5)
+        
+        # Advanced options frame
+        self.advanced_frame = tk.LabelFrame(root, text="Advanced Options")
+        self.advanced_frame.pack(pady=10, padx=10, fill="x")
+        
+        self.set_value_button = tk.Button(self.advanced_frame, text="Set Custom Value", command=self.set_custom_value)
+        self.set_value_button.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        self.dump_info_button = tk.Button(self.advanced_frame, text="Dump ConVar Info", command=self.dump_convar_info)
+        self.dump_info_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        
+        # Info label
+        self.info_label = tk.Label(root, text="Press INSERT key to toggle bypass", font=("Arial", 10, "italic"))
+        self.info_label.pack(pady=10)
+        
+        # Set up cleanup on window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # Update status periodically
+        self.update_status()
+    
+    def toggle_bypass(self):
+        toggle_sv_cheats_bypass()
+        self.update_status()
+    
+    def refresh_status(self):
+        self.update_status(force=True)
+    
+    def set_custom_value(self):
+        if not sv_cheats_address:
+            messagebox.showerror("Error", "sv_cheats ConVar not found!")
+            return
+            
+        try:
+            value = simpledialog.askinteger("Set sv_cheats Value", "Enter value for sv_cheats:", 
+                                           minvalue=0, maxvalue=1000)
+            if value is not None:
+                logging.info(f"Setting custom sv_cheats value: {value}")
+                pm.write_int(sv_cheats_address + CONVAR_VALUE_OFFSET, value)
+                pm.write_float(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET, float(value))
+                self.update_status(force=True)
+        except Exception as e:
+            logging.error(f"Error setting custom value: {str(e)}")
+            messagebox.showerror("Error", f"Failed to set value: {str(e)}")
+    
+    def dump_convar_info(self):
+        if not sv_cheats_address:
+            messagebox.showerror("Error", "sv_cheats ConVar not found!")
+            return
+            
+        try:
+            # Read ConVar structure details
+            flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+            value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+            float_value = pm.read_float(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET)
+            
+            # Try to read string value and name
+            try:
+                string_ptr = pm.read_int(sv_cheats_address + CONVAR_STRING_OFFSET)
+                string_value = pm.read_string(string_ptr, 32)
+            except:
+                string_value = "Unable to read"
+                
+            try:
+                name_ptr = sv_cheats_address + CONVAR_NAME_OFFSET
+                name = pm.read_string(name_ptr, 32)
+            except:
+                name = "sv_cheats"
+            
+            # Format the flags as binary for better understanding
+            flags_binary = format(flags, '032b')
+            flags_formatted = ' '.join(flags_binary[i:i+4] for i in range(0, len(flags_binary), 4))
+            
+            info = (
+                f"ConVar: {name}\n"
+                f"Address: 0x{sv_cheats_address:X}\n"
+                f"Int Value: {value}\n"
+                f"Float Value: {float_value}\n"
+                f"String Value: {string_value}\n"
+                f"Flags (Hex): 0x{flags:X}\n"
+                f"Flags (Binary): {flags_formatted}\n\n"
+                f"Flag Meanings:\n"
+                f"FCVAR_UNREGISTERED (1): {bool(flags & FCVAR_UNREGISTERED)}\n"
+                f"FCVAR_DEVELOPMENTONLY (2): {bool(flags & FCVAR_DEVELOPMENTONLY)}\n"
+                f"FCVAR_GAMEDLL (4): {bool(flags & FCVAR_GAMEDLL)}\n"
+                f"FCVAR_CLIENTDLL (8): {bool(flags & FCVAR_CLIENTDLL)}\n"
+                f"FCVAR_CHEAT (16): {bool(flags & FCVAR_CHEAT)}\n"
+                f"FCVAR_PROTECTED (32): {bool(flags & FCVAR_PROTECTED)}\n"
+                f"FCVAR_SPONLY (64): {bool(flags & FCVAR_SPONLY)}\n"
+                f"FCVAR_ARCHIVE (128): {bool(flags & FCVAR_ARCHIVE)}\n"
+                f"FCVAR_REPLICATED (256): {bool(flags & FCVAR_REPLICATED)}"
+            )
+            
+            # Log the info
+            logging.info(f"ConVar Dump:\n{info}")
+            
+            # Show in a message box
+            messagebox.showinfo("ConVar Information", info)
+        except Exception as e:
+            logging.error(f"Error dumping ConVar info: {str(e)}")
+            messagebox.showerror("Error", f"Failed to dump ConVar info: {str(e)}")
+    
+    def update_status(self, force=False):
+        try:
+            if sv_cheats_address:
+                # Update game process info
+                if pm and pm.process_handle:
+                    process = psutil.Process(pm.process_id)
+                    self.game_label.config(text=f"Game: {process.name()} (PID: {pm.process_id})")
+                
+                # Update sv_cheats value and flags
+                value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+                flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+                
+                self.value_label.config(text=f"sv_cheats value: {value}")
+                self.flags_label.config(text=f"Flags: 0x{flags:X}")
+                
+                if bypass_active:
+                    self.status_label.config(text="Status: BYPASS ACTIVE", fg="green")
+                else:
+                    self.status_label.config(text="Status: Inactive", fg="black")
+            else:
+                self.status_label.config(text="Status: ConVar Not Found", fg="red")
+        except Exception as e:
+            if force:
+                logging.error(f"Error updating status: {str(e)}")
+                self.status_label.config(text="Status: Error", fg="red")
+        
+        # Schedule the next update
+        self.root.after(1000, self.update_status)
+    
+    def on_close(self):
+        cleanup()
+        self.root.destroy()
+
+def main():
+    try:
+        # Initialize the application
+        if not initialize():
+            return
+        
+        # Create the main window
+        root = tk.Tk()
+        app = SvCheatsApp(root)
+        
+        # Start the message pump
+        root.mainloop()
+    except Exception as e:
+        logging.error(f"Exception in main: {str(e)}")
+        messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
