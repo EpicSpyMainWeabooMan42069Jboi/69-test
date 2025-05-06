@@ -1,4 +1,3 @@
-
 import os
 import sys
 import time
@@ -308,7 +307,7 @@ def initialize():
         random.seed(time.time())
         
         # Find game process
-        game_names = ["hl2.exe", "csgo.exe", "portal2.exe", "left4dead2.exe", "tf2.exe"]
+        game_names = ["hl2.exe", "csgo.exe", "portal2.exe", "left4dead2.exe", "tf_win64.exe"]
         game_pid = find_game_process(game_names)
         
         if not game_pid:
