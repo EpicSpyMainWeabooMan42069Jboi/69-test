@@ -1,3 +1,10 @@
+Now then, this is a little thought I had for a while now, that’s been swirling around and I could get an answer for it… If I went to TOR one more time and took my time after searching and digging hypothetically, came across a site for Hacking, or a form to do discussions like a Q/A, I would give out a topic on the house, as a little deal.
+
+Basically, I wanna know if it’s possible to share the code of SHROCK (Sv_cheats Bypass for TF2)to them to see if *they* could possibly lend a hand out, for a broken heart to mend, and in return; I ask for personal questions/answers as to how it functions and if it would actually work, and knowledge that I haven't gained yet.
+
+Also, I’m not 2 years old, and If they try to fuck with me by either ddos/ sending a trojin/RAT, then I will cut ties with them completely, because I WILL find out if they did that or not, which is stupid, becuase why would you do that to a pal like me?  
+
+
 import os
 import sys
 import time
@@ -16,7 +23,7 @@ from tkinter import messagebox, simpledialog
 # Set up logging
 logging.basicConfig(
     filename='sv_cheats_bypass_log.txt',
-    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filemode='w'
 )
@@ -29,20 +36,18 @@ VK_INSERT = 0x2D
 # Global variables
 bypass_active = False
 keyboard_hook = None
-keyboard_hook_pointer = None  # Keep reference to prevent garbage collection
 pm = None  # Pymem instance
 game_process = None
 sv_cheats_address = None
 original_flags = 0
 original_value = 0
 
-# ConVar offsets - these may need adjustment for different games/versions
+# ConVar offsets - these would need to be updated for specific games
 CONVAR_NAME_OFFSET = 0x0C
 CONVAR_FLAGS_OFFSET = 0x14
 CONVAR_VALUE_OFFSET = 0x30
 CONVAR_FLOAT_VALUE_OFFSET = 0x2C
 CONVAR_STRING_OFFSET = 0x24
-CONVAR_NEXT_OFFSET = 0x4  # Offset to the next ConVar in the linked list
 
 # Flag definitions
 FCVAR_UNREGISTERED = (1 << 0)
@@ -73,31 +78,6 @@ def find_game_process(game_names):
         logging.error(f"Error finding game process: {str(e)}")
         return None
 
-def find_pattern(pattern, module_name=None):
-    """Find a pattern in memory"""
-    try:
-        if module_name:
-            module = None
-            for mod in pm.list_modules():
-                if mod.name.lower() == module_name.lower():
-                    module = mod
-                    break
-            
-            if not module:
-                logging.error(f"Module {module_name} not found")
-                return None
-            
-            logging.info(f"Scanning for pattern in {module_name} at 0x{module.lpBaseOfDll:X}")
-            result = pymem.pattern.pattern_scan_module(pm.process_handle, module, pattern)
-        else:
-            logging.info("Scanning for pattern in entire process memory")
-            result = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=True)
-            
-        return result
-    except Exception as e:
-        logging.error(f"Error in pattern scanning: {str(e)}")
-        return None
-
 def find_cvar_interface():
     """Find the ICvar interface in the game memory"""
     try:
@@ -116,81 +96,19 @@ def find_cvar_interface():
             
         logging.info(f"Found vstdlib.dll at 0x{vstdlib.lpBaseOfDll:X}")
         
+        # This part is highly game-specific and would require pattern scanning
+        # For demonstration, we'll use a simplified approach
+        
+        # Try to find CreateInterface function
+        create_interface = pm.read_bytes(vstdlib.lpBaseOfDll, 0x1000)
+        # In a real implementation, you would scan for the CreateInterface pattern
+        
         # For demonstration, we'll assume we found the ICvar interface
+        # In reality, this would require more complex pattern scanning and pointer following
         logging.info("Successfully found ICvar interface (simulated)")
         return True
     except Exception as e:
         logging.error(f"Error finding ICvar interface: {str(e)}")
-        return None
-
-def find_convar_by_traversal(start_convar, name):
-    """Find a ConVar by traversing the ConVar linked list"""
-    try:
-        current = start_convar
-        count = 0
-        max_count = 10000  # Safety limit
-        
-        while current and count < max_count:
-            try:
-                # Read the name
-                name_ptr = current + CONVAR_NAME_OFFSET
-                convar_name = pm.read_string(name_ptr, 32)
-                
-                logging.debug(f"Checking ConVar at 0x{current:X}: {convar_name}")
-                
-                if convar_name.lower() == name.lower():
-                    logging.info(f"Found ConVar {name} at 0x{current:X}")
-                    return current
-                
-                # Move to next ConVar
-                current = pm.read_int(current + CONVAR_NEXT_OFFSET)
-                count += 1
-            except Exception as e:
-                logging.debug(f"Error reading ConVar at 0x{current:X}: {str(e)}")
-                break
-        
-        logging.error(f"ConVar {name} not found after checking {count} ConVars")
-        return None
-    except Exception as e:
-        logging.error(f"Error in ConVar traversal: {str(e)}")
-        return None
-
-def find_convar_head():
-    """Find the head of the ConVar linked list"""
-    try:
-        # Try multiple methods to find the ConVar list head
-        
-        # Method 1: Look for a known ConVar pattern
-        patterns = [
-            b"sv_cheats\x00",
-            b"host_timescale\x00",
-            b"developer\x00",
-            b"fps_max\x00"
-        ]
-        
-        for pattern in patterns:
-            matches = find_pattern(pattern)
-            if matches and len(matches) > 0:
-                for match in matches:
-                    try:
-                        # Check if this could be a valid ConVar
-                        possible_convar = match - CONVAR_NAME_OFFSET
-                        flags = pm.read_int(possible_convar + CONVAR_FLAGS_OFFSET)
-                        
-                        # If it has reasonable flags, try to find the list head
-                        if 0 <= flags <= 0xFFFF:
-                            logging.info(f"Found potential ConVar at 0x{possible_convar:X}")
-                            
-                            # Try to find the head by traversing backwards
-                            # This is a simplified approach and may not work in all games
-                            return possible_convar
-                    except Exception as e:
-                        logging.debug(f"Error checking potential ConVar: {str(e)}")
-        
-        logging.error("Could not find ConVar list head")
-        return None
-    except Exception as e:
-        logging.error(f"Error finding ConVar head: {str(e)}")
         return None
 
 def find_convar(name):
@@ -198,67 +116,39 @@ def find_convar(name):
     try:
         logging.info(f"Looking for ConVar: {name}")
         
-        # Method 1: Direct pattern scan for the ConVar name
-        pattern = name.encode('ascii') + b'\x00'
-        matches = find_pattern(pattern)
+        # In a real implementation, this would involve:
+        # 1. Finding the ConVar list head pointer
+        # 2. Traversing the linked list of ConVars
+        # 3. Checking each ConVar's name against the target name
         
-        if matches and len(matches) > 0:
-            logging.info(f"Found {len(matches)} potential matches for {name}")
+        # For demonstration, we'll use a simplified approach with pattern scanning
+        
+        # Example pattern for sv_cheats (this would be game-specific)
+        pattern = b"sv_cheats\x00"
+        
+        # Search for the pattern in the game's memory
+        matches = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=True)
+        
+        if not matches:
+            logging.error(f"Could not find {name} ConVar")
+            return None
             
-            for match in matches:
-                try:
-                    # Check if this is a valid ConVar by reading its structure
-                    possible_convar_addr = match - CONVAR_NAME_OFFSET
-                    flags = pm.read_int(possible_convar_addr + CONVAR_FLAGS_OFFSET)
-                    
-                    # If it has reasonable flags, it might be our ConVar
-                    if 0 <= flags <= 0xFFFF:
-                        value = pm.read_int(possible_convar_addr + CONVAR_VALUE_OFFSET)
-                        logging.info(f"Found potential {name} at 0x{possible_convar_addr:X}, value={value}, flags=0x{flags:X}")
-                        
-                        # Additional validation: try to read the name back
-                        try:
-                            read_name = pm.read_string(possible_convar_addr + CONVAR_NAME_OFFSET, 32)
-                            if read_name.lower() == name.lower():
-                                logging.info(f"Validated {name} ConVar at 0x{possible_convar_addr:X}")
-                                return possible_convar_addr
-                        except:
-                            pass
-                except Exception as e:
-                    logging.debug(f"Error checking potential ConVar at 0x{match:X}: {str(e)}")
-        
-        # Method 2: Try to find the ConVar list head and traverse it
-        logging.info("Trying to find ConVar through list traversal")
-        head = find_convar_head()
-        if head:
-            result = find_convar_by_traversal(head, name)
-            if result:
-                return result
-        
-        # Method 3: Try alternative patterns for different game versions
-        logging.info("Trying alternative patterns")
-        alt_patterns = [
-            bytes([0x00]) + name.encode('ascii') + bytes([0x00]),  # Null byte before name
-            name.encode('ascii') + bytes([0x00, 0x00, 0x00, 0x00])  # Multiple null bytes after
-        ]
-        
-        for pattern in alt_patterns:
-            matches = find_pattern(pattern)
-            if matches and len(matches) > 0:
-                for match in matches:
-                    try:
-                        # Adjust the offset based on the pattern
-                        offset = 1 if pattern[0] == 0 else 0
-                        possible_convar_addr = (match + offset) - CONVAR_NAME_OFFSET
-                        flags = pm.read_int(possible_convar_addr + CONVAR_FLAGS_OFFSET)
-                        
-                        if 0 <= flags <= 0xFFFF:
-                            value = pm.read_int(possible_convar_addr + CONVAR_VALUE_OFFSET)
-                            logging.info(f"Found potential {name} with alt pattern at 0x{possible_convar_addr:X}")
-                            return possible_convar_addr
-                    except:
-                        pass
-        
+        # For each match, check if it's actually a ConVar
+        for match in matches:
+            try:
+                # Check if this is a valid ConVar by reading its structure
+                # This is a simplified check and would need to be more robust in practice
+                possible_convar_addr = match - CONVAR_NAME_OFFSET
+                flags = pm.read_int(possible_convar_addr + CONVAR_FLAGS_OFFSET)
+                
+                # If it has reasonable flags, it might be our ConVar
+                if 0 <= flags <= 0xFFFF:
+                    value = pm.read_int(possible_convar_addr + CONVAR_VALUE_OFFSET)
+                    logging.info(f"Found potential {name} at 0x{possible_convar_addr:X}, value={value}, flags=0x{flags:X}")
+                    return possible_convar_addr
+            except Exception:
+                continue
+                
         logging.error(f"Could not find valid {name} ConVar")
         return None
     except Exception as e:
@@ -348,13 +238,12 @@ def low_level_keyboard_handler(nCode, wParam, lParam):
         if nCode >= 0 and wParam == WM_KEYDOWN:
             kb_struct = ctypes.cast(lParam, ctypes.POINTER(ctypes.c_ulong))
             vk_code = kb_struct[0]
-         
+            
             # Check for INSERT key
             if vk_code == VK_INSERT:
                 logging.info("INSERT key detected!")
-                # Use after to avoid blocking the message loop
-                if tk._default_root:
-                    tk._default_root.after(1, toggle_sv_cheats_bypass)
+                toggle_sv_cheats_bypass()
+                return 1  # Prevent other hooks from processing this key
     except Exception as e:
         logging.error(f"Exception in keyboard handler: {str(e)}")
     
@@ -362,27 +251,26 @@ def low_level_keyboard_handler(nCode, wParam, lParam):
     return ctypes.windll.user32.CallNextHookEx(keyboard_hook, nCode, wParam, lParam)
 
 def set_keyboard_hook():
-    global keyboard_hook, keyboard_hook_pointer
+    global keyboard_hook
     
     try:
         logging.info("Setting up keyboard hook")
         
         # Define the callback function type
         CMPFUNC = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))
-        keyboard_hook_pointer = CMPFUNC(low_level_keyboard_handler)
+        pointer = CMPFUNC(low_level_keyboard_handler)
         
         # Set the hook
-        keyboard_hook = ctypes.windll.user32.SetWindowsHookExW(
+        keyboard_hook = ctypes.windll.user32.SetWindowsHookExA(
             WH_KEYBOARD_LL, 
-            keyboard_hook_pointer, 
-            ctypes.windll.kernel32.GetModuleHandleW(None), 
+            pointer, 
+            ctypes.windll.kernel32.GetModuleHandleA(None), 
             0
         )
         
         if not keyboard_hook:
-            error_code = ctypes.windll.kernel32.GetLastError()
-            logging.error(f"Failed to set keyboard hook! Error code: {error_code}")
-            messagebox.showerror("Error", f"Failed to set keyboard hook! Error code: {error_code}")
+            logging.error("Failed to set keyboard hook!")
+            messagebox.showerror("Error", "Failed to set keyboard hook!")
             return False
             
         logging.info("Keyboard hook set up successfully")
@@ -426,11 +314,7 @@ def initialize():
         random.seed(time.time())
         
         # Find game process
-        game_names = [
-            "hl2.exe", "csgo.exe", "portal2.exe", "left4dead2.exe", 
-            "tf_win64.exe", "tf2.exe", "hl2_win64.exe", "csgo_win64.exe",
-            "portal2_win64.exe", "left4dead2_win64.exe", "dota2.exe"
-        ]
+        game_names = ["hl2.exe", "csgo.exe", "portal2.exe", "left4dead2.exe", "tf_win64.exe"]
         game_pid = find_game_process(game_names)
         
         if not game_pid:
@@ -449,13 +333,15 @@ def initialize():
         
         # Find ICvar interface
         if not find_cvar_interface():
-            logging.warning("Failed to find ICvar interface! Continuing anyway...")
+            logging.error("Failed to find ICvar interface!")
+            messagebox.showerror("Error", "Failed to find ICvar interface!")
+            return False
         
         # Find sv_cheats ConVar
         sv_cheats_address = find_convar("sv_cheats")
         if not sv_cheats_address:
             logging.error("Failed to find sv_cheats ConVar!")
-            messagebox.showerror("Error", "Failed to find sv_cheats ConVar! Make sure you're running a Source Engine game.")
+            messagebox.showerror("Error", "Failed to find sv_cheats ConVar!")
             return False
         
         # Set up keyboard hook
@@ -636,17 +522,6 @@ class SvCheatsApp:
         cleanup()
         self.root.destroy()
 
-def process_messages():
-    """Process Windows messages to keep the keyboard hook working"""
-    msg = wintypes.MSG()
-    while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
-        ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-        ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
-    
-    # Schedule the next message processing
-    if tk._default_root:
-        tk._default_root.after(10, process_messages)
-
 def main():
     try:
         # Initialize the application
@@ -657,180 +532,12 @@ def main():
         root = tk.Tk()
         app = SvCheatsApp(root)
         
-        # Start message processing for keyboard hook
-        process_messages()
-        
         # Start the message pump
         root.mainloop()
     except Exception as e:
         logging.error(f"Exception in main: {str(e)}")
         messagebox.showerror("Error", f"An error occurred: {str(e)}")
-    finally:
-        # Make sure we clean up
-        cleanup()
 
 if __name__ == "__main__":
     main()
-
-For batch.
-
-
-)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
-
-@echo off
-setlocal enabledelayedexpansion
-
-echo SV_CHEATS Bypass Tool Builder
-echo ============================
-echo.
-
-REM Check if Python is installed
-python --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Python is not installed or not in PATH.
-    echo Please install Python from https://www.python.org/downloads/
-    echo Make sure to check "Add Python to PATH" during installation.
-    pause
-    exit /b 1
-)
-
-REM Check if required packages are installed
-echo Checking required packages...
-python -c "import pymem" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo Installing pymem...
-    pip install pymem
-)
-
-python -c "import psutil" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo Installing psutil...
-    pip install psutil
-)
-
-REM Check if PyInstaller is installed
-python -c "import PyInstaller" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo Installing PyInstaller...
-    pip install pyinstaller
-)
-
-echo All required packages are installed.
-echo.
-
-:menu
-cls
-echo SV_CHEATS Bypass Tool
-echo ============================
-echo 1. Build executable
-echo 2. Run Python script directly
-echo 3. Run executable (if already built)
-echo 4. Exit
-echo.
-set /p choice="Enter your choice (1-4): "
-
-if "%choice%"=="1" goto build
-if "%choice%"=="2" goto run_script
-if "%choice%"=="3" goto run_exe
-if "%choice%"=="4" goto end
-goto menu
-
-:build
-echo.
-echo Building executable...
-echo.
-
-REM Check if the script exists
-if not exist fixed_game_convar_hook.py (
-    echo ERROR: fixed_game_convar_hook.py not found in the current directory.
-    pause
-    goto menu
-)
-
-REM Build with PyInstaller
-pyinstaller --onefile --noconsole --uac-admin --name "SvCheatsUnlocker" fixed_game_convar_hook.py
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo ERROR: Build failed!
-    pause
-    goto menu
-)
-
-echo.
-echo Build successful! Executable created in dist\SvCheatsUnlocker.exe
-echo.
-pause
-goto menu
-
-:run_script
-echo.
-echo Running Python script directly...
-echo.
-
-REM Check if the script exists
-if not exist fixed_game_convar_hook.py (
-    echo ERROR: fixed_game_convar_hook.py not found in the current directory.
-    pause
-    goto menu
-)
-
-REM Check if a Source engine game is running
-tasklist /FI "IMAGENAME eq hl2.exe" /FI "IMAGENAME eq csgo.exe" /FI "IMAGENAME eq portal2.exe" /FI "IMAGENAME eq left4dead2.exe" /FI "IMAGENAME eq tf2.exe" 2>NUL | find /I /N "exe" >NUL
-if %ERRORLEVEL% NEQ 0 (
-    echo WARNING: No Source engine game appears to be running.
-    echo The tool needs a running game to work properly.
-    echo.
-    set /p continue="Continue anyway? (y/n): "
-    if /i not "!continue!"=="y" goto menu
-)
-
-REM Run the script with elevated privileges
-echo Running script with admin privileges...
-powershell -Command "Start-Process python -ArgumentList 'fixed_game_convar_hook.py' -Verb RunAs"
-
-echo.
-echo Script started. Check for any error messages.
-echo.
-pause
-goto menu
-
-:run_exe
-echo.
-echo Running executable...
-echo.
-
-REM Check if the executable exists
-if not exist dist\SvCheatsUnlocker.exe (
-    echo ERROR: Executable not found. Build it first.
-    pause
-    goto menu
-)
-
-REM Check if a Source engine game is running
-tasklist /FI "IMAGENAME eq hl2.exe" /FI "IMAGENAME eq csgo.exe" /FI "IMAGENAME eq portal2.exe" /FI "IMAGENAME eq left4dead2.exe" /FI "IMAGENAME eq tf2.exe" 2>NUL | find /I /N "exe" >NUL
-if %ERRORLEVEL% NEQ 0 (
-    echo WARNING: No Source engine game appears to be running.
-    echo The tool needs a running game to work properly.
-    echo.
-    set /p continue="Continue anyway? (y/n): "
-    if /i not "!continue!"=="y" goto menu
-)
-
-REM Run the executable with elevated privileges
-echo Running executable with admin privileges...
-powershell -Command "Start-Process 'dist\SvCheatsUnlocker.exe' -Verb RunAs"
-
-echo.
-echo Executable started. Check for any error messages.
-echo.
-pause
-goto menu
-
-:end
-echo.
-echo Thank you for using SV_CHEATS Bypass Tool.
-echo.
-exit /b 0
-
-
+    
