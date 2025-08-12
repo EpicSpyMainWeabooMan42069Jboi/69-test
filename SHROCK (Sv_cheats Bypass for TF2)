@@ -1,10 +1,3 @@
-Now then, this is a little thought I had for a while now, that’s been swirling around and I could get an answer for it… If I went to TOR one more time and took my time after searching and digging hypothetically, came across a site for Hacking, or a form to do discussions like a Q/A, I would give out a topic on the house, as a little deal.
-
-Basically, I wanna know if it’s possible to share the code of SHROCK (Sv_cheats Bypass for TF2)to them to see if *they* could possibly lend a hand out, for a broken heart to mend, and in return; I ask for personal questions/answers as to how it functions and if it would actually work, and knowledge that I haven't gained yet.
-
-Also, I’m not 2 years old, and If they try to fuck with me by either ddos/ sending a trojin/RAT, then I will cut ties with them completely, because I WILL find out if they did that or not, which is stupid, becuase why would you do that to a pal like me?  
-
-
 import os
 import sys
 import time
@@ -20,6 +13,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
+
 # Set up logging
 logging.basicConfig(
     filename='sv_cheats_bypass_log.txt',
@@ -28,10 +22,17 @@ logging.basicConfig(
     filemode='w'
 )
 
+
 # Constants for Windows API
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
 VK_INSERT = 0x2D
+
+
+# Memory protection constants
+PAGE_EXECUTE_READWRITE = 0x40
+PAGE_READWRITE = 0x04
+
 
 # Global variables
 bypass_active = False
@@ -42,12 +43,14 @@ sv_cheats_address = None
 original_flags = 0
 original_value = 0
 
+
 # ConVar offsets - these would need to be updated for specific games
 CONVAR_NAME_OFFSET = 0x0C
 CONVAR_FLAGS_OFFSET = 0x14
 CONVAR_VALUE_OFFSET = 0x30
 CONVAR_FLOAT_VALUE_OFFSET = 0x2C
 CONVAR_STRING_OFFSET = 0x24
+
 
 # Flag definitions
 FCVAR_UNREGISTERED = (1 << 0)
@@ -60,10 +63,131 @@ FCVAR_SPONLY = (1 << 6)
 FCVAR_ARCHIVE = (1 << 7)
 FCVAR_REPLICATED = (1 << 8)
 
+
+def change_memory_protection(address, size, new_protection):
+    """Change memory protection for a region"""
+    try:
+        old_protection = wintypes.DWORD()
+        result = ctypes.windll.kernel32.VirtualProtectEx(
+            pm.process_handle,
+            ctypes.c_void_p(address),
+            size,
+            new_protection,
+            ctypes.byref(old_protection)
+        )
+        if result:
+            return old_protection.value
+        else:
+            error = ctypes.windll.kernel32.GetLastError()
+            logging.error(f"VirtualProtectEx failed with error: {error}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception in change_memory_protection: {str(e)}")
+        return None
+
+
+def safe_write_memory(address, value, value_type="int"):
+    """Safely write to protected memory"""
+    try:
+        size = 4 if value_type in ["int", "float"] else len(value) if isinstance(value, bytes) else 4
+        old_protection = change_memory_protection(address, size, PAGE_READWRITE)
+        if old_protection is None:
+            return False
+        if value_type == "int":
+            pm.write_int(address, value)
+        elif value_type == "float":
+            pm.write_float(address, value)
+        elif value_type == "bytes":
+            pm.write_bytes(address, value, len(value))
+        change_memory_protection(address, size, old_protection)
+        return True
+    except Exception as e:
+        logging.error(f"Exception in safe_write_memory: {str(e)}")
+        return False
+
+
+def find_convar_improved(name):
+    """Improved ConVar finding with better validation"""
+    try:
+        logging.info(f"Looking for ConVar: {name}")
+        target_modules = ["engine.dll", "server.dll", "client.dll", "tier0.dll"]
+        for module in pm.list_modules():
+            if any(target in module.name.lower() for target in target_modules):
+                logging.info(f"Scanning module: {module.name}")
+                pattern = name.encode('ascii') + b'\x00'
+                try:
+                    matches = pymem.pattern.pattern_scan_module(
+                        pm.process_handle,
+                        module,
+                        pattern
+                    )
+                    if matches:
+                        for match in [matches] if not isinstance(matches, list) else matches:
+                            convar_addr = validate_convar_structure(match, name)
+                            if convar_addr:
+                                return convar_addr
+                except Exception as e:
+                    logging.warning(f"Error scanning {module.name}: {str(e)}")
+                    continue
+        return None
+    except Exception as e:
+        logging.error(f"Error in find_convar_improved: {str(e)}")
+        return None
+
+
+def validate_convar_structure(name_addr, expected_name):
+    """Validate that an address points to a valid ConVar"""
+    try:
+        possible_bases = [
+            name_addr - CONVAR_NAME_OFFSET,
+            name_addr - 0x04,
+            name_addr - 0x08,
+        ]
+        for base_addr in possible_bases:
+            try:
+                flags = pm.read_int(base_addr + CONVAR_FLAGS_OFFSET)
+                if flags < 0 or flags > 0x10000:
+                    continue
+                try:
+                    read_name = pm.read_string(base_addr + CONVAR_NAME_OFFSET, len(expected_name) + 1)
+                    if read_name.lower() == expected_name.lower():
+                        logging.info(f"Validated ConVar {expected_name} at 0x{base_addr:X}")
+                        return base_addr
+                except:
+                    pass
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        logging.error(f"Error validating ConVar structure: {str(e)}")
+        return None
+
+
+def elevate_process_privileges():
+    """Attempt to get debug privileges"""
+    try:
+        import ctypes.wintypes
+        token = ctypes.wintypes.HANDLE()
+        ctypes.windll.advapi32.OpenProcessToken(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            0x0020,  # TOKEN_ADJUST_PRIVILEGES
+            ctypes.byref(token)
+        )
+        privilege = ctypes.c_uint64(0x0000000000000014)  # SE_DEBUG_PRIVILEGE
+        ctypes.windll.advapi32.LookupPrivilegeValueW(
+            None, "SeDebugPrivilege", ctypes.byref(privilege)
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Could not elevate privileges: {str(e)}")
+        return False
+
+
 def random_string(length):
     """Generate a random string of fixed length"""
     letters = string.ascii_letters
     return ''.join(random.choice(letters) for _ in range(length))
+
 
 def find_game_process(game_names):
     """Find the game process by name"""
@@ -78,119 +202,58 @@ def find_game_process(game_names):
         logging.error(f"Error finding game process: {str(e)}")
         return None
 
+
 def find_cvar_interface():
     """Find the ICvar interface in the game memory"""
     try:
         logging.info("Looking for ICvar interface...")
-        
-        # Try to find vstdlib.dll module
         vstdlib = None
         for module in pm.list_modules():
             if module.name.lower() == "vstdlib.dll":
                 vstdlib = module
                 break
-        
         if not vstdlib:
             logging.error("vstdlib.dll not found")
             return None
-            
         logging.info(f"Found vstdlib.dll at 0x{vstdlib.lpBaseOfDll:X}")
-        
-        # This part is highly game-specific and would require pattern scanning
-        # For demonstration, we'll use a simplified approach
-        
-        # Try to find CreateInterface function
         create_interface = pm.read_bytes(vstdlib.lpBaseOfDll, 0x1000)
-        # In a real implementation, you would scan for the CreateInterface pattern
-        
-        # For demonstration, we'll assume we found the ICvar interface
-        # In reality, this would require more complex pattern scanning and pointer following
         logging.info("Successfully found ICvar interface (simulated)")
         return True
     except Exception as e:
         logging.error(f"Error finding ICvar interface: {str(e)}")
         return None
 
-def find_convar(name):
-    """Find a ConVar by name in the game memory"""
-    try:
-        logging.info(f"Looking for ConVar: {name}")
-        
-        # In a real implementation, this would involve:
-        # 1. Finding the ConVar list head pointer
-        # 2. Traversing the linked list of ConVars
-        # 3. Checking each ConVar's name against the target name
-        
-        # For demonstration, we'll use a simplified approach with pattern scanning
-        
-        # Example pattern for sv_cheats (this would be game-specific)
-        pattern = b"sv_cheats\x00"
-        
-        # Search for the pattern in the game's memory
-        matches = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=True)
-        
-        if not matches:
-            logging.error(f"Could not find {name} ConVar")
-            return None
-            
-        # For each match, check if it's actually a ConVar
-        for match in matches:
-            try:
-                # Check if this is a valid ConVar by reading its structure
-                # This is a simplified check and would need to be more robust in practice
-                possible_convar_addr = match - CONVAR_NAME_OFFSET
-                flags = pm.read_int(possible_convar_addr + CONVAR_FLAGS_OFFSET)
-                
-                # If it has reasonable flags, it might be our ConVar
-                if 0 <= flags <= 0xFFFF:
-                    value = pm.read_int(possible_convar_addr + CONVAR_VALUE_OFFSET)
-                    logging.info(f"Found potential {name} at 0x{possible_convar_addr:X}, value={value}, flags=0x{flags:X}")
-                    return possible_convar_addr
-            except Exception:
-                continue
-                
-        logging.error(f"Could not find valid {name} ConVar")
-        return None
-    except Exception as e:
-        logging.error(f"Error finding ConVar {name}: {str(e)}")
-        return None
 
 def enable_sv_cheats_bypass():
     global bypass_active, original_flags, original_value
-    
     try:
         if not sv_cheats_address:
             messagebox.showerror("Error", "sv_cheats ConVar not found!")
             return
-            
         logging.info("Attempting to enable sv_cheats bypass...")
-        
-        # Save original values
-        original_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
-        original_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
-        
+        try:
+            original_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
+            original_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
+        except Exception as e:
+            logging.error(f"Failed to read original values: {str(e)}")
+            return
         logging.info(f"Original sv_cheats flags: 0x{original_flags:X}, value: {original_value}")
-        
-        # Remove protection flags
         new_flags = original_flags
         new_flags &= ~FCVAR_CHEAT
         new_flags &= ~FCVAR_REPLICATED
         new_flags &= ~FCVAR_PROTECTED
         new_flags &= ~FCVAR_SPONLY
-        
-        # Write the new flags to memory
-        pm.write_int(sv_cheats_address + CONVAR_FLAGS_OFFSET, new_flags)
-        
-        # Set sv_cheats to 1
-        pm.write_int(sv_cheats_address + CONVAR_VALUE_OFFSET, 1)
-        pm.write_float(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET, 1.0)
-        
-        # Verify the changes
+        if not safe_write_memory(sv_cheats_address + CONVAR_FLAGS_OFFSET, new_flags, "int"):
+            messagebox.showerror("Error", "Failed to modify ConVar flags!")
+            return
+        if not safe_write_memory(sv_cheats_address + CONVAR_VALUE_OFFSET, 1, "int"):
+            messagebox.showerror("Error", "Failed to modify ConVar value!")
+            return
+        if not safe_write_memory(sv_cheats_address + CONVAR_FLOAT_VALUE_OFFSET, 1.0, "float"):
+            logging.warning("Failed to modify float value, but continuing...")
         current_flags = pm.read_int(sv_cheats_address + CONVAR_FLAGS_OFFSET)
         current_value = pm.read_int(sv_cheats_address + CONVAR_VALUE_OFFSET)
-        
-        logging.info(f"After bypass: sv_cheats flags = 0x{current_flags:X}, value = {current_value}")
-        
+        logging.info(f"After bypass: flags=0x{current_flags:X}, value={current_value}")
         bypass_active = True
         messagebox.showinfo("Success", "sv_cheats bypass ENABLED")
     except Exception as e:
@@ -306,8 +369,13 @@ def initialize():
     global pm, sv_cheats_address
     
     try:
+        
+        # Try to elevate privileges first 
+  
+         elevate_process_privileges()
+       
         # Clear log file
-        with open('sv_cheats_bypass_log.txt', 'w') as f:
+         with open('sv_cheats_bypass_log.txt', 'w') as f:
             f.write("Initializing sv_cheats bypass plugin...\n")
         
         # Set random seed
@@ -540,4 +608,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
