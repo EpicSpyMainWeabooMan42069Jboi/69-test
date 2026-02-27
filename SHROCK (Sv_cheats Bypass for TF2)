@@ -1,3 +1,9 @@
+CPlayerShared::AddCond, m_hLocal, dwLocalPlayer, etc.),
+
+Proper DLL requires MinHook or PolyHook, ImGui menu, manual mapping (not basic LoadLibrary), netchannel spoofing for server sync, and VAC-safe patterns
+
+
+
 import os
 import sys
 import time
@@ -29,6 +35,34 @@ VK_INSERT = 0x2D
 # Memory protection constants
 PAGE_EXECUTE_READWRITE = 0x40
 PAGE_READWRITE = 0x04
+
+
+
+
+
+// dllmain.cpp - After module base + ImGui init
+uintptr_t GetLocalPlayer() { /* sig: client.dll A1 ? ? ? ? 8B 88 ? ? ? ? 85 C9 */ }
+void ForceAddCond66(bool enable) {
+    auto local = GetLocalPlayer();
+    if (!local) return;
+    
+    uintptr_t shared = *(uintptr_t*)(local + 0xF8);  // m_Shared offset (sigscan)
+    static auto AddCond = (void(__thiscall*)(uintptr_t, int))SigScan("server.dll", "55 8B EC 51 53 8B 5D 08");  // Real sig
+    
+    if (enable) {
+        AddCond(shared, 66);  // Ghost mode ON
+        // Optional: Hook State_Changed to force server replicate
+    } else {
+        AddCond(shared, 0);   // Clear all? Or specific removecond equiv
+    }
+}
+
+// Hook your low-level kb (or ImGui key)
+if (GetAsyncKeyState(VK_INSERT) & 1) {
+    static bool invis = false;
+    ForceAddCond66(!invis);
+    invis = !invis;
+}
 
 # Global variables
 bypass_active = False
