@@ -1,4 +1,4 @@
-Hello, I'm still shit at coding, but if you could take this code belows and rewrite it it work normally, and to turn into a dll that once injected make you have god mod or no taken damange for tf2 for Education reasons. 
+Hello, I'm still shit at coding, but if you could take this code below and rewrite it  works normally, not slop and to turn into a 64 bit dll that once injected makes you have god mod or to take no damage for Team Fortress 2 for Education reasons. 
 
 CPlayerShared::AddCond, m_hLocal, dwLocalPlayer, etc.),
 
@@ -756,3 +756,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
