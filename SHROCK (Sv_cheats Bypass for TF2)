@@ -1,6 +1,64 @@
+Hello, I'm still shit at coding, but if you could take this code belows and rewrite it it work normally, and to turn into a dll that once injected make you have god mod or no taken damange for tf2 for Education reasons. 
+
 CPlayerShared::AddCond, m_hLocal, dwLocalPlayer, etc.),
 
 Proper DLL requires MinHook or PolyHook, ImGui menu, manual mapping (not basic LoadLibrary), netchannel spoofing for server sync, and VAC-safe patterns
+
+bool CLagRecords::IsSimulationTimeValid(float flCurSimTime, float flCmprSimTime)
+{
+	return flCurSimTime - flCmprSimTime < 0.2f;
+}
+Code:
+void CLagRecords::UpdateRecords()
+{
+   bool GetClientEntityFromHandle ( CBaseHandle handle, void **ppEnt )
+{
+	if ( handle.m_Index == INVALID_EHANDLE_INDEX )
+	{
+		return false;
+	}
+ 
+	const CEntInfo* pInfo = &EntPtrArray[ handle.GetEntryIndex() ];
+ 
+	if ( pInfo->m_SerialNumber != handle.GetSerialNumber() )
+	{
+		return false;
+	}
+ 
+	*ppEnt = pInfo->m_pEntity;
+ 
+	return true;
+}
+
+
+	int GetEntryIndex() const
+		{
+			return !IsValid() ? NUM_ENT_ENTRIES - 1 : m_Index & ENT_ENTRY_MASK;
+		}
+ 
+		int GetSerialNumber() const
+		{
+			return m_Index >> NUM_SERIAL_NUM_SHIFT_BITS;
+		}
+
+	// Remove invalid records
+	for (auto& records : m_LagRecords | std::views::values)
+	{
+		for (auto it = records.begin(); it != records.end(); )
+		{
+			const auto& curRecord = *it;
+			if (!curRecord.Player || !IsSimulationTimeValid(curRecord.Player->m_flSimulationTime(), curRecord.SimulationTime))
+			{
+				it = records.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
+	}
+}
+
 
 
 
